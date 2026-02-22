@@ -1,9 +1,8 @@
 import { useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
 interface InputBarProps {
   disabled?: boolean;
-  onSend?: (text: string) => void;
+  onSend: (text: string) => Promise<void>;
 }
 
 export default function InputBar({ disabled, onSend }: InputBarProps) {
@@ -16,8 +15,7 @@ export default function InputBar({ disabled, onSend }: InputBarProps) {
 
     setSending(true);
     try {
-      await invoke("send_input", { data: trimmed + "\n" });
-      onSend?.(trimmed);
+      await onSend(trimmed);
       setText("");
     } catch (err) {
       console.error("Failed to send input:", err);
