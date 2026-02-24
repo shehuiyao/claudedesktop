@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import Sidebar from "./components/Sidebar";
 import ChatArea from "./components/ChatArea";
 import ChatView from "./components/ChatView";
@@ -8,6 +9,8 @@ import LiveTerminal from "./components/LiveTerminal";
 import StatusBar from "./components/StatusBar";
 import FileTree from "./components/FileTree";
 import SkillsPanel from "./components/SkillsPanel";
+import BranchSwitcher from "./components/BranchSwitcher";
+import CommitHistory from "./components/CommitHistory";
 import TabBar, { type Tab } from "./components/TabBar";
 
 interface GitInfo {
@@ -20,15 +23,19 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showFileTree, setShowFileTree] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
+  const [showCommits, setShowCommits] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<string | null>(null);
   const [workingDir, setWorkingDir] = useState<string | null>(null);
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   // Track tabs that have had terminal mode activated (for lazy mounting)
   const [terminalActivated, setTerminalActivated] = useState<Set<string>>(new Set());
+  // Map sessionId -> tabId for correlating pty events to tabs
+  const sessionTabMap = useRef<Map<string, string>>(new Map());
 
   const handleNewTab = useCallback(async () => {
     const selected = await open({
@@ -41,7 +48,7 @@ function App() {
       const dirName = selected.split("/").pop() || selected;
       setTabs((prev) => [
         ...prev,
-        { id: tabId, label: dirName, workingDir: selected, mode: "terminal" },
+        { id: tabId, label: dirName, workingDir: selected, mode: "terminal", status: "idle" },
       ]);
       // Don't activate terminal yet - let user pick mode first
       setActiveTabId(tabId);
@@ -67,6 +74,12 @@ function App() {
         next.delete(tabId);
         return next;
       });
+      // Clean up session-to-tab mappings for this tab
+      for (const [sessionId, mappedTabId] of sessionTabMap.current.entries()) {
+        if (mappedTabId === tabId) {
+          sessionTabMap.current.delete(sessionId);
+        }
+      }
     },
     [activeTabId],
   );
@@ -85,9 +98,57 @@ function App() {
   const handleStartTerminal = useCallback((tabId: string, yolo: boolean) => {
     setTerminalActivated((prev) => new Set(prev).add(tabId));
     setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo } : t))
+      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo, status: "running" as const } : t))
     );
   }, []);
+
+  // Update a specific tab's status
+  const updateTabStatus = useCallback((tabId: string, status: Tab["status"]) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, status } : t))
+    );
+  }, []);
+
+  // Called when a LiveTerminal session starts - maps sessionId to tabId
+  const handleSessionStarted = useCallback((tabId: string, sessionId: string) => {
+    sessionTabMap.current.set(sessionId, tabId);
+  }, []);
+
+  // Listen for pty-output and pty-exit events to update tab status
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+
+    const setupListeners = async () => {
+      const outputUn = await listen<{ id: string; data: string }>("pty-output", (event) => {
+        const tabId = sessionTabMap.current.get(event.payload.id);
+        if (tabId) {
+          // If tab is idle and we receive output, set to running
+          setTabs((prev) =>
+            prev.map((t) =>
+              t.id === tabId && t.status === "idle" ? { ...t, status: "running" } : t
+            )
+          );
+        }
+      });
+      unlisteners.push(outputUn);
+
+      const exitUn = await listen<{ id: string; code?: number }>("pty-exit", (event) => {
+        const tabId = sessionTabMap.current.get(event.payload.id);
+        if (tabId) {
+          updateTabStatus(tabId, "done");
+          // Clean up the mapping
+          sessionTabMap.current.delete(event.payload.id);
+        }
+      });
+      unlisteners.push(exitUn);
+    };
+
+    setupListeners();
+
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [updateTabStatus]);
 
   const handleSwitchMode = useCallback((tabId: string, mode: "chat" | "terminal") => {
     if (mode === "terminal") {
@@ -112,7 +173,7 @@ function App() {
     const dirName = projectPath.split("/").pop() || projectPath;
     setTabs((prev) => [
       ...prev,
-      { id: tabId, label: dirName, workingDir: projectPath, mode: "terminal" },
+      { id: tabId, label: dirName, workingDir: projectPath, mode: "terminal", status: "idle" },
     ]);
     // Don't activate terminal yet - let user pick mode first
     setActiveTabId(tabId);
@@ -124,6 +185,16 @@ function App() {
   const handleNewSession = useCallback(async () => {
     await handleNewTab();
   }, [handleNewTab]);
+
+  const [commitRefreshKey, setCommitRefreshKey] = useState(0);
+
+  const refreshGitInfo = useCallback(() => {
+    if (!workingDir) return;
+    invoke<GitInfo>("get_git_info", { path: workingDir })
+      .then(setGitInfo)
+      .catch(() => setGitInfo(null));
+    setCommitRefreshKey((k) => k + 1);
+  }, [workingDir]);
 
   // Fetch git info when working directory changes
   useEffect(() => {
@@ -199,6 +270,16 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleNewTab, handleCloseTab, handleSelectTab]);
 
+  // Listen for window close request from backend
+  useEffect(() => {
+    const unlisten = listen("close-requested", () => {
+      setShowCloseConfirm(true);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const showingTab = activeTabId !== null && activeTab !== undefined;
 
@@ -218,7 +299,7 @@ function App() {
         )}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Header bar */}
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] flex-nowrap min-w-0">
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="w-6 h-6 flex flex-col items-center justify-center gap-[3px] rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150"
@@ -235,20 +316,14 @@ function App() {
                   ? `session: ${activeSessionId.slice(0, 8)}...`
                   : "Claude Code Desktop"}
             </span>
-            {gitInfo && (
-              <span className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]">
-                <span className="flex items-center gap-1">
-                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="text-[var(--accent-orange)]">
-                    <path d="M5.45 3.18a.7.7 0 0 0-.99 0L.73 6.91a.7.7 0 0 0 0 .99l3.73 3.73a.7.7 0 0 0 .99-.99L2.22 7.4l3.23-3.23a.7.7 0 0 0 0-.99zm5.1 0a.7.7 0 0 1 .99 0l3.73 3.73a.7.7 0 0 1 0 .99l-3.73 3.73a.7.7 0 0 1-.99-.99L13.78 7.4l-3.23-3.23a.7.7 0 0 1 0-.99z"/>
-                  </svg>
-                  {gitInfo.branch}
-                </span>
-                <span className="text-[var(--accent-green)]">+{gitInfo.additions}</span>
-                <span className="text-[var(--accent-red)]">-{gitInfo.deletions}</span>
-              </span>
-            )}
+            <div className="ml-auto flex items-center gap-2 shrink-0">
+              <BranchSwitcher
+                gitInfo={gitInfo}
+                workingDir={workingDir}
+                onBranchSwitched={refreshGitInfo}
+              />
             {showingTab && (
-              <span className={`ml-auto flex items-center gap-1.5 text-[10px] ${
+              <span className={`flex items-center gap-1.5 text-[10px] ${
                 activeTab.yolo ? "text-[var(--accent-orange)]" : "text-[var(--accent-green)]"
               }`}>
                 <span className={`inline-block w-1.5 h-1.5 rounded-full animate-pulse ${
@@ -257,6 +332,7 @@ function App() {
                 {activeTab.mode === "chat" ? "chat" : activeTab.yolo ? "yolo" : "terminal"}
               </span>
             )}
+            </div>
           </div>
 
           {tabs.length > 0 && (
@@ -347,7 +423,11 @@ function App() {
                       </button>
                     </div>
                     <div className="flex-1 overflow-hidden">
-                      <LiveTerminal workingDir={tab.workingDir} yolo={tab.yolo} />
+                      <LiveTerminal
+                      workingDir={tab.workingDir}
+                      yolo={tab.yolo}
+                      onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
+                    />
                     </div>
                   </div>
                 ))}
@@ -390,6 +470,11 @@ function App() {
               )}
             </div>
 
+            {/* Commit history panel - right side */}
+            {showCommits && workingDir && (
+              <CommitHistory key={commitRefreshKey} workingDir={workingDir} />
+            )}
+
             {/* File tree panel - right side */}
             {showFileTree && workingDir && <FileTree rootPath={workingDir} />}
 
@@ -413,6 +498,14 @@ function App() {
           Skills
         </button>
         <button
+          onClick={() => setShowCommits(!showCommits)}
+          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+            showCommits ? "text-[var(--accent-blue)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+          }`}
+        >
+          Commits
+        </button>
+        <button
           onClick={() => setShowFileTree(!showFileTree)}
           className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
             showFileTree ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
@@ -421,6 +514,39 @@ function App() {
           Files
         </button>
       </div>
+
+      {/* Close confirmation modal */}
+      {showCloseConfirm && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+        >
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <div className="text-sm font-medium text-[var(--text-primary)] mb-2">
+              Quit Application?
+            </div>
+            <div className="text-xs text-[var(--text-muted)] mb-6">
+              Are you sure you want to quit? Any running sessions will be terminated.
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowCloseConfirm(false)}
+                className="px-4 py-1.5 text-xs rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 border border-[var(--border-subtle)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  invoke("confirm_close").catch(() => {});
+                }}
+                className="px-4 py-1.5 text-xs rounded-lg bg-red-600 text-white hover:bg-red-500 cursor-pointer transition-colors duration-150"
+              >
+                Quit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

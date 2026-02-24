@@ -6,7 +6,7 @@ use chat_runner::ChatProcess;
 use message_runner::PtySession;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 struct AppState {
     sessions: Mutex<HashMap<String, PtySession>>,
@@ -290,6 +290,242 @@ fn get_git_info(path: String) -> Result<GitInfo, String> {
 }
 
 #[derive(serde::Serialize)]
+struct BranchList {
+    current: String,
+    local: Vec<String>,
+    remote: Vec<String>,
+}
+
+#[tauri::command]
+fn list_branches(path: String) -> Result<BranchList, String> {
+    use std::process::Command;
+
+    let current_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if !current_output.status.success() {
+        return Err("Not a git repository".to_string());
+    }
+
+    let current = String::from_utf8_lossy(&current_output.stdout)
+        .trim()
+        .to_string();
+
+    let local_output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to list local branches: {}", e))?;
+
+    let local: Vec<String> = String::from_utf8_lossy(&local_output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let remote_output = Command::new("git")
+        .args(["branch", "-r", "--format=%(refname:short)"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to list remote branches: {}", e))?;
+
+    let remote: Vec<String> = String::from_utf8_lossy(&remote_output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !s.contains("HEAD"))
+        .collect();
+
+    Ok(BranchList {
+        current,
+        local,
+        remote,
+    })
+}
+
+#[derive(serde::Serialize)]
+struct SwitchResult {
+    success: bool,
+    message: String,
+}
+
+#[tauri::command]
+fn switch_branch(path: String, branch: String, force: bool) -> Result<SwitchResult, String> {
+    use std::process::Command;
+
+    // Check for dirty working tree
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to run git status: {}", e))?;
+
+    let status_text = String::from_utf8_lossy(&status_output.stdout);
+    if !status_text.trim().is_empty() && !force {
+        return Ok(SwitchResult {
+            success: false,
+            message: "dirty".to_string(),
+        });
+    }
+
+    let checkout_output = Command::new("git")
+        .args(["checkout", &branch])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to run git checkout: {}", e))?;
+
+    if checkout_output.status.success() {
+        Ok(SwitchResult {
+            success: true,
+            message: format!("Switched to branch '{}'", branch),
+        })
+    } else {
+        let stderr = String::from_utf8_lossy(&checkout_output.stderr)
+            .trim()
+            .to_string();
+        Ok(SwitchResult {
+            success: false,
+            message: stderr,
+        })
+    }
+}
+
+#[derive(serde::Serialize)]
+struct CommitEntry {
+    hash: String,
+    message: String,
+    author: String,
+    time_ago: String,
+}
+
+#[tauri::command]
+fn get_commit_history(path: String, count: Option<u32>) -> Result<Vec<CommitEntry>, String> {
+    use std::process::Command;
+
+    let max_count = count.unwrap_or(20);
+    let log_output = Command::new("git")
+        .args([
+            "log",
+            &format!("--max-count={}", max_count),
+            "--format=%h\x1f%s\x1f%an\x1f%cr",
+        ])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("Failed to run git log: {}", e))?;
+
+    if !log_output.status.success() {
+        return Err("Failed to get commit history".to_string());
+    }
+
+    let commits: Vec<CommitEntry> = String::from_utf8_lossy(&log_output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\x1f').collect();
+            if parts.len() >= 4 {
+                Some(CommitEntry {
+                    hash: parts[0].to_string(),
+                    message: parts[1].to_string(),
+                    author: parts[2].to_string(),
+                    time_ago: parts[3].to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(commits)
+}
+
+// ---- Update check ----
+
+const APP_VERSION: &str = "0.5.1";
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    current_version: String,
+    latest_version: String,
+    update_available: bool,
+    release_url: String,
+}
+
+#[tauri::command]
+fn check_for_update() -> Result<UpdateInfo, String> {
+    // Fetch latest release from GitHub API
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("claude-desktop-updater")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get("https://api.github.com/repos/shehuiyao/claudedesktop/releases/latest")
+        .send()
+        .map_err(|e| format!("Failed to check for updates: {}", e))?;
+
+    if !resp.status().is_success() {
+        // No releases published yet or API error
+        return Ok(UpdateInfo {
+            current_version: APP_VERSION.to_string(),
+            latest_version: APP_VERSION.to_string(),
+            update_available: false,
+            release_url: String::new(),
+        });
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Strip leading 'v' if present (e.g., "v0.5.1" -> "0.5.1")
+    let latest_version = tag.strip_prefix('v').unwrap_or(tag).to_string();
+
+    let release_url = json
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let update_available = version_is_newer(&latest_version, APP_VERSION);
+
+    Ok(UpdateInfo {
+        current_version: APP_VERSION.to_string(),
+        latest_version,
+        update_available,
+        release_url,
+    })
+}
+
+/// Compare semver strings: returns true if `latest` is newer than `current`
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|s| s.parse::<u32>().ok())
+            .collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv {
+            return true;
+        }
+        if lv < cv {
+            return false;
+        }
+    }
+    false
+}
+
+#[derive(serde::Serialize)]
 struct SkillInfo {
     name: String,
     source: String,
@@ -338,6 +574,21 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
     Ok(skills)
 }
 
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    use std::process::Command;
+    Command::new("open")
+        .args(["-R", &path])
+        .spawn()
+        .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn confirm_close(window: tauri::Window) -> Result<(), String> {
+    window.destroy().map_err(|e| format!("Failed to close: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -363,23 +614,39 @@ pub fn run() {
             chat_send,
             chat_stop,
             chat_test,
+            list_branches,
+            switch_branch,
+            get_commit_history,
+            reveal_in_finder,
+            confirm_close,
+            check_for_update,
         ])
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(state) = _window.try_state::<AppState>() {
-                    if let Ok(mut sessions) = state.sessions.lock() {
-                        let drained: Vec<(String, PtySession)> = sessions.drain().collect();
-                        for (_, session) in drained {
-                            session.kill();
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // Prevent the default close
+                    api.prevent_close();
+                    // Ask frontend for confirmation
+                    let window = window.clone();
+                    window.emit("close-requested", ()).ok();
+                }
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(state) = window.try_state::<AppState>() {
+                        if let Ok(mut sessions) = state.sessions.lock() {
+                            let drained: Vec<(String, PtySession)> = sessions.drain().collect();
+                            for (_, session) in drained {
+                                session.kill();
+                            }
                         }
-                    }
-                    if let Ok(mut chats) = state.chats.lock() {
-                        let drained: Vec<(String, ChatProcess)> = chats.drain().collect();
-                        for (_, process) in drained {
-                            process.kill();
+                        if let Ok(mut chats) = state.chats.lock() {
+                            let drained: Vec<(String, ChatProcess)> = chats.drain().collect();
+                            for (_, process) in drained {
+                                process.kill();
+                            }
                         }
                     }
                 }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

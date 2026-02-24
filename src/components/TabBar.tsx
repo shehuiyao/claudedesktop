@@ -4,6 +4,7 @@ export interface Tab {
   workingDir: string;
   mode: "chat" | "terminal";
   yolo?: boolean;
+  status?: "idle" | "running" | "error" | "done";
 }
 
 interface TabBarProps {
@@ -38,6 +39,13 @@ export default function TabBar({
             {isActive && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--accent-blue)]" />
             )}
+            {/* Status dot */}
+            <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+              tab.status === "running" ? "bg-[var(--accent-green)] animate-pulse" :
+              tab.status === "error" ? "bg-[var(--accent-red)]" :
+              tab.status === "done" ? "bg-[var(--accent-blue)]" :
+              "bg-[var(--text-muted)]"
+            }`} />
             <span className="truncate max-w-[120px]">{tab.label}</span>
             <button
               className={`ml-1 w-4 h-4 flex items-center justify-center rounded-sm text-[10px] leading-none cursor-pointer transition-all duration-150 ${

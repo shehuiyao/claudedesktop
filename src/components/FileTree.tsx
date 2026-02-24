@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface FileEntry {
@@ -7,11 +7,19 @@ interface FileEntry {
   is_dir: boolean;
 }
 
-interface TreeNodeProps {
-  entry: FileEntry;
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  entry: FileEntry | null;
 }
 
-function TreeNode({ entry }: TreeNodeProps) {
+interface TreeNodeProps {
+  entry: FileEntry;
+  onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+}
+
+function TreeNode({ entry, onContextMenu }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -37,6 +45,7 @@ function TreeNode({ entry }: TreeNodeProps) {
     <div>
       <div
         onClick={toggle}
+        onContextMenu={(e) => onContextMenu(e, entry)}
         className={`flex items-center gap-1.5 px-2 py-0.5 text-xs truncate rounded-sm transition-colors duration-100 ${
           entry.is_dir
             ? "text-[var(--text-primary)] cursor-pointer hover:bg-[var(--bg-hover)]"
@@ -56,7 +65,7 @@ function TreeNode({ entry }: TreeNodeProps) {
       {expanded && children.length > 0 && (
         <div className="pl-3">
           {children.map((child) => (
-            <TreeNode key={child.path} entry={child} />
+            <TreeNode key={child.path} entry={child} onContextMenu={onContextMenu} />
           ))}
         </div>
       )}
@@ -71,6 +80,13 @@ interface FileTreeProps {
 export default function FileTree({ rootPath }: FileTreeProps) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    entry: null,
+  });
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!rootPath) return;
@@ -80,8 +96,40 @@ export default function FileTree({ rootPath }: FileTreeProps) {
       .catch((e) => setError(String(e)));
   }, [rootPath]);
 
+  // Close context menu when clicking anywhere
+  useEffect(() => {
+    const handleClick = () => {
+      setContextMenu((prev) => ({ ...prev, visible: false }));
+    };
+    if (contextMenu.visible) {
+      document.addEventListener("click", handleClick);
+      return () => document.removeEventListener("click", handleClick);
+    }
+  }, [contextMenu.visible]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      entry,
+    });
+  }, []);
+
+  const handleRevealInFinder = useCallback(async () => {
+    if (!contextMenu.entry) return;
+    try {
+      await invoke("reveal_in_finder", { path: contextMenu.entry.path });
+    } catch (err) {
+      console.error("Failed to reveal in Finder:", err);
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [contextMenu.entry]);
+
   return (
-    <div className="w-56 border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] flex flex-col overflow-hidden">
+    <div className="w-56 border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] flex flex-col overflow-hidden relative">
       <div className="px-3 py-2 text-[10px] font-medium text-[var(--text-muted)] border-b border-[var(--border-subtle)] uppercase tracking-wider">
         Explorer
       </div>
@@ -96,10 +144,29 @@ export default function FileTree({ rootPath }: FileTreeProps) {
           </div>
         ) : (
           entries.map((entry) => (
-            <TreeNode key={entry.path} entry={entry} />
+            <TreeNode key={entry.path} entry={entry} onContextMenu={handleContextMenu} />
           ))
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[160px] py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] shadow-lg"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+        >
+          <button
+            onClick={handleRevealInFinder}
+            className="w-full px-3 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-100 cursor-pointer"
+          >
+            Reveal in Finder
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,20 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+/// Find the last valid UTF-8 boundary in a byte slice.
+/// Returns the number of bytes that form valid UTF-8 from the start.
+/// Any trailing incomplete multi-byte sequence is excluded.
+fn find_utf8_boundary(data: &[u8]) -> usize {
+    match std::str::from_utf8(data) {
+        Ok(_) => data.len(), // All valid
+        Err(e) => {
+            // valid_up_to() gives us the index of the first invalid byte
+            // Everything before it is valid UTF-8
+            e.valid_up_to()
+        }
+    }
+}
+
 pub fn resolve_claude_path() -> Result<PathBuf, String> {
     if let Ok(path) = which::which("claude") {
         return Ok(path);
@@ -93,7 +107,10 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("SHELL", &shell);
         cmd.env("USER", std::env::var("USER").unwrap_or_default());
-        cmd.env("LANG", std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string()));
+        let locale = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+        cmd.env("LANG", &locale);
+        cmd.env("LC_ALL", &locale);
+        cmd.env("LC_CTYPE", &locale);
         let path_val = augmented_path();
         cmd.env("PATH", &path_val);
 
@@ -133,20 +150,44 @@ impl PtySession {
 
         let app_clone = app.clone();
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 8192];
+            let mut remainder: Vec<u8> = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => {
+                        // Flush any remaining bytes
+                        if !remainder.is_empty() {
+                            let data = String::from_utf8_lossy(&remainder).to_string();
+                            let _ = app_clone.emit(
+                                "pty-output",
+                                serde_json::json!({"id": session_id, "data": data}),
+                            );
+                        }
                         let _ = app_clone
                             .emit("pty-exit", serde_json::json!({"id": session_id}));
                         break;
                     }
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = app_clone.emit(
-                            "pty-output",
-                            serde_json::json!({"id": session_id, "data": data}),
-                        );
+                        // Combine leftover bytes from previous read with new data
+                        let mut combined = std::mem::take(&mut remainder);
+                        combined.extend_from_slice(&buf[..n]);
+
+                        // Find the last valid UTF-8 boundary
+                        let valid_up_to = find_utf8_boundary(&combined);
+
+                        // Save incomplete bytes for next read
+                        if valid_up_to < combined.len() {
+                            remainder = combined[valid_up_to..].to_vec();
+                        }
+
+                        if valid_up_to > 0 {
+                            // Safe: we verified this is valid UTF-8 up to this point
+                            let data = String::from_utf8_lossy(&combined[..valid_up_to]).to_string();
+                            let _ = app_clone.emit(
+                                "pty-output",
+                                serde_json::json!({"id": session_id, "data": data}),
+                            );
+                        }
                     }
                     Err(_) => {
                         let _ = app_clone

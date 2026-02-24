@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
@@ -11,8 +12,54 @@ interface LiveTerminalProps {
   onSessionStarted?: (id: string) => void;
 }
 
-// Use system monospace fonts — same as --font-mono in global.css
-const TERM_FONT = "ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Mono', Consolas, 'Liberation Mono', 'Courier New', monospace";
+const TERM_FONT = "'JetBrains Mono NF', 'SF Mono', Menlo, Monaco, monospace";
+
+function getTerminalTheme(isDark: boolean) {
+  if (isDark) {
+    return {
+      background: "#0d1117",
+      foreground: "#e6edf3",
+      cursor: "#39d2c0",
+      black: "#161b22",
+      red: "#f85149",
+      green: "#3fb950",
+      yellow: "#d29922",
+      blue: "#58a6ff",
+      magenta: "#bc8cff",
+      cyan: "#39d2c0",
+      white: "#8b949e",
+      brightBlack: "#484f58",
+      brightRed: "#ff7b72",
+      brightGreen: "#56d364",
+      brightYellow: "#e3b341",
+      brightBlue: "#79c0ff",
+      brightMagenta: "#d2a8ff",
+      brightCyan: "#56d4c4",
+      brightWhite: "#f0f6fc",
+    };
+  }
+  return {
+    background: "#ffffff",
+    foreground: "#1f2328",
+    cursor: "#0598a1",
+    black: "#1f2328",
+    red: "#cf222e",
+    green: "#1a7f37",
+    yellow: "#9a6700",
+    blue: "#0969da",
+    magenta: "#8250df",
+    cyan: "#0598a1",
+    white: "#6e7781",
+    brightBlack: "#8b949e",
+    brightRed: "#a40e26",
+    brightGreen: "#2da44e",
+    brightYellow: "#bf8700",
+    brightBlue: "#218bff",
+    brightMagenta: "#a475f9",
+    brightCyan: "#3192aa",
+    brightWhite: "#1f2328",
+  };
+}
 
 export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: LiveTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -21,6 +68,47 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
   const sessionIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    // Get file paths from the drop
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      // Collect all file paths, quote them if they contain spaces
+      const paths: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        // In Tauri/Electron, the File object has a `path` property
+        const filePath = (file as any).path;
+        if (filePath) {
+          // Quote path if it contains spaces
+          const quotedPath = filePath.includes(" ") ? `"${filePath}"` : filePath;
+          paths.push(quotedPath);
+        }
+      }
+
+      if (paths.length > 0 && sessionIdRef.current) {
+        const pathString = paths.join(" ");
+        invoke("send_input", { sessionId: sessionIdRef.current, data: pathString }).catch(() => {});
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -35,37 +123,39 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
     const setup = async () => {
       if (unmounted || !containerRef.current) return;
 
+      const currentTheme = document.documentElement.getAttribute("data-theme");
+      const isDark = currentTheme !== "light";
+
       term = new XTerm({
-        theme: {
-          background: "#0d1117",
-          foreground: "#e6edf3",
-          cursor: "#39d2c0",
-          black: "#161b22",
-          red: "#f85149",
-          green: "#3fb950",
-          yellow: "#d29922",
-          blue: "#58a6ff",
-          magenta: "#bc8cff",
-          cyan: "#39d2c0",
-          white: "#8b949e",
-          brightBlack: "#484f58",
-          brightRed: "#ff7b72",
-          brightGreen: "#56d364",
-          brightYellow: "#e3b341",
-          brightBlue: "#79c0ff",
-          brightMagenta: "#d2a8ff",
-          brightCyan: "#56d4c4",
-          brightWhite: "#f0f6fc",
-        },
+        theme: getTerminalTheme(isDark),
         fontSize: 13,
         fontFamily: TERM_FONT,
+        customGlyphs: false,
+        drawBoldTextInBrightColors: false,
         cursorBlink: true,
         scrollback: 5000,
       });
 
       fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
+
+      // Load Unicode11 for correct CJK character widths
+      try {
+        const unicode11 = new Unicode11Addon();
+        term.loadAddon(unicode11);
+      } catch {
+        // fallback to default unicode handling
+      }
+
       term.open(containerRef.current!);
+
+      // Set activeVersion AFTER open()
+      try {
+        term.unicode.activeVersion = "11";
+      } catch {
+        // ignore
+      }
+
       fitAddon.fit();
 
       termRef.current = term;
@@ -116,6 +206,22 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
         term.write(`\x1b[31mError: ${e}\x1b[0m\r\n`);
       }
 
+      // Listen for theme changes and update terminal colors
+      const themeObserver = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (mutation.type === "attributes" && mutation.attributeName === "data-theme") {
+            const newTheme = document.documentElement.getAttribute("data-theme");
+            const newIsDark = newTheme !== "light";
+            term!.options.theme = getTerminalTheme(newIsDark);
+          }
+        }
+      });
+      themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+      unlisteners.push(() => themeObserver.disconnect());
+
       // Handle resize
       observer = new ResizeObserver(() => {
         fitAddon!.fit();
@@ -151,7 +257,20 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div
+      className="h-full flex flex-col overflow-hidden relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drop zone overlay */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--bg-primary)]/80 border-2 border-dashed border-[var(--accent-cyan)] rounded-lg pointer-events-none">
+          <div className="text-sm text-[var(--accent-cyan)]">
+            Drop files to paste path
+          </div>
+        </div>
+      )}
       {starting && (
         <div className="px-3 py-1 text-xs text-[var(--text-secondary)] bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
           Starting Claude session...

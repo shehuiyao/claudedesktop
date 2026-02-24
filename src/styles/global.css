@@ -1,5 +1,33 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'SF Mono';
+  src: url('../assets/fonts/SF-Mono-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'SF Mono';
+  src: url('../assets/fonts/SF-Mono-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono NF';
+  src: url('../assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono NF';
+  src: url('../assets/fonts/JetBrainsMonoNerdFontMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+
 :root {
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
@@ -27,6 +55,25 @@
   --font-mono: ui-monospace, 'SF Mono', Menlo, Monaco,
     'Cascadia Mono', Consolas, 'Liberation Mono', 'Courier New',
     monospace;
+}
+
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eaeef2;
+  --bg-hover: #d0d7de;
+  --text-primary: #1f2328;
+  --text-secondary: #656d76;
+  --text-muted: #8b949e;
+  --accent-green: #1a7f37;
+  --accent-blue: #0969da;
+  --accent-purple: #8250df;
+  --accent-red: #cf222e;
+  --accent-orange: #9a6700;
+  --accent-cyan: #0598a1;
+  --border-color: #d0d7de;
+  --border-subtle: #d8dee4;
+  --shadow-color: rgba(31, 35, 40, 0.15);
 }
 
 body {
