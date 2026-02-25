@@ -448,17 +448,20 @@ struct UpdateInfo {
     current_version: String,
     latest_version: String,
     update_available: bool,
-    release_url: String,
+    download_url: String,
+}
+
+fn github_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent("claude-desktop-updater")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))
 }
 
 #[tauri::command]
 fn check_for_update() -> Result<UpdateInfo, String> {
-    // Fetch latest release from GitHub API
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("claude-desktop-updater")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
+    let client = github_client()?;
 
     let resp = client
         .get("https://api.github.com/repos/shehuiyao/claudedesktop/releases/latest")
@@ -466,12 +469,11 @@ fn check_for_update() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("Failed to check for updates: {}", e))?;
 
     if !resp.status().is_success() {
-        // No releases published yet or API error
         return Ok(UpdateInfo {
             current_version: APP_VERSION.to_string(),
             latest_version: APP_VERSION.to_string(),
             update_available: false,
-            release_url: String::new(),
+            download_url: String::new(),
         });
     }
 
@@ -484,14 +486,26 @@ fn check_for_update() -> Result<UpdateInfo, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Strip leading 'v' if present (e.g., "v0.5.1" -> "0.5.1")
     let latest_version = tag.strip_prefix('v').unwrap_or(tag).to_string();
 
-    let release_url = json
-        .get("html_url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // Find the .dmg asset download URL
+    let download_url = json
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .and_then(|assets| {
+            assets.iter().find_map(|asset| {
+                let name = asset.get("name")?.as_str()?;
+                if name.ends_with(".dmg") {
+                    asset
+                        .get("browser_download_url")
+                        .and_then(|u| u.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default();
 
     let update_available = version_is_newer(&latest_version, APP_VERSION);
 
@@ -499,8 +513,58 @@ fn check_for_update() -> Result<UpdateInfo, String> {
         current_version: APP_VERSION.to_string(),
         latest_version,
         update_available,
-        release_url,
+        download_url,
     })
+}
+
+#[tauri::command]
+fn download_and_install_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use std::io::Write;
+
+    let client = github_client()?;
+
+    // Emit progress to frontend
+    let app_clone = app.clone();
+    let emit_progress = move |msg: &str| {
+        let _ = app_clone.emit("update-progress", msg);
+    };
+
+    emit_progress("Downloading...");
+
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("Download failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Download failed with status: {}", resp.status()));
+    }
+
+    let bytes = resp
+        .bytes()
+        .map_err(|e| format!("Failed to read download: {}", e))?;
+
+    // Save to temp directory
+    let tmp_dir = std::env::temp_dir();
+    let dmg_path = tmp_dir.join("Claude Desktop_update.dmg");
+
+    let mut file = std::fs::File::create(&dmg_path)
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    file.write_all(&bytes)
+        .map_err(|e| format!("Failed to write DMG: {}", e))?;
+
+    emit_progress("Opening installer...");
+
+    // Open the DMG
+    std::process::Command::new("open")
+        .arg(&dmg_path)
+        .spawn()
+        .map_err(|e| format!("Failed to open DMG: {}", e))?;
+
+    let _ = app.emit("update-progress", "done");
+
+    Ok(())
 }
 
 /// Compare semver strings: returns true if `latest` is newer than `current`
@@ -620,6 +684,7 @@ pub fn run() {
             reveal_in_finder,
             confirm_close,
             check_for_update,
+            download_and_install_update,
         ])
         .on_window_event(|window, event| {
             match event {
