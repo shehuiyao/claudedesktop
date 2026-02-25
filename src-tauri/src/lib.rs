@@ -38,6 +38,7 @@ fn start_session(
     state: State<'_, AppState>,
     working_dir: String,
     yolo: Option<bool>,
+    tool: Option<String>,
 ) -> Result<String, String> {
     let mut next = state
         .next_id
@@ -47,7 +48,8 @@ fn start_session(
     *next += 1;
     drop(next);
 
-    let session = PtySession::spawn(app, working_dir, id.clone(), yolo.unwrap_or(false))?;
+    let tool_name = tool.unwrap_or_else(|| "claude".to_string());
+    let session = PtySession::spawn(app, working_dir, id.clone(), yolo.unwrap_or(false), tool_name)?;
     let mut sessions = state
         .sessions
         .lock()

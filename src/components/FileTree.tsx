@@ -130,8 +130,26 @@ export default function FileTree({ rootPath }: FileTreeProps) {
 
   return (
     <div className="w-56 border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] flex flex-col overflow-hidden relative">
-      <div className="px-3 py-2 text-[10px] font-medium text-[var(--text-muted)] border-b border-[var(--border-subtle)] uppercase tracking-wider">
-        Explorer
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)]">
+        <span className="text-[10px] font-medium text-[var(--text-muted)] uppercase tracking-wider">
+          Explorer
+        </span>
+        <button
+          onClick={async () => {
+            try {
+              await invoke("reveal_in_finder", { path: rootPath });
+            } catch (err) {
+              console.error("Failed to reveal in Finder:", err);
+            }
+          }}
+          className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150"
+          title="Reveal root folder in Finder"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6 1h5.5a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-1 0V2.707l-4.146 4.147a.5.5 0 0 1-.708-.708L10.293 2H8a.5.5 0 0 1 0-1Z" />
+            <path d="M1 5a2 2 0 0 1 2-2h3a.5.5 0 0 1 0 1H3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3a.5.5 0 0 1 1 0v3a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5Z" />
+          </svg>
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
         {error ? (

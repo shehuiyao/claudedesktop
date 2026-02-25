@@ -2,6 +2,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -137,14 +138,39 @@ pub fn send_chat_message(
     let master_arc: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>> =
         Arc::new(Mutex::new(Some(pair.master)));
 
+    // Flag to track whether any output has been received (for startup timeout)
+    let has_output = Arc::new(AtomicBool::new(false));
+
+    // Startup timeout thread: if no output received within 30 seconds, emit chat-error
+    {
+        let app_timeout = app.clone();
+        let chat_id_timeout = chat_id.clone();
+        let has_output_clone = has_output.clone();
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_secs(30));
+            if !has_output_clone.load(Ordering::SeqCst) {
+                let _ = app_timeout.emit(
+                    "chat-error",
+                    serde_json::json!({
+                        "chatId": chat_id_timeout,
+                        "error": "Startup timeout: no response received within 30 seconds. The backend process may be stuck."
+                    }),
+                );
+            }
+        });
+    }
+
     // Read PTY output line by line — real-time streaming
     let app_clone = app.clone();
     let chat_id_clone = chat_id.clone();
+    let has_output_reader = has_output.clone();
     thread::spawn(move || {
         let buf_reader = std::io::BufReader::new(reader);
         for line_result in buf_reader.lines() {
             match line_result {
                 Ok(line) => {
+                    // Mark that we received output (cancels startup timeout)
+                    has_output_reader.store(true, Ordering::SeqCst);
                     let cleaned = strip_ansi(&line);
                     let trimmed = cleaned.trim();
                     if trimmed.is_empty() {
@@ -162,7 +188,17 @@ pub fn send_chat_message(
                         );
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    // Emit detailed error event before exiting
+                    let _ = app_clone.emit(
+                        "chat-error",
+                        serde_json::json!({
+                            "chatId": chat_id_clone,
+                            "error": format!("Chat read error: {}", e)
+                        }),
+                    );
+                    break;
+                }
             }
         }
         let _ = app_clone.emit(

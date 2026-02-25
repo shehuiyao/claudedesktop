@@ -1,6 +1,7 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -35,6 +36,31 @@ pub fn resolve_claude_path() -> Result<PathBuf, String> {
         }
     }
     Err("Cannot find 'claude' binary. Make sure Claude Code CLI is installed.".to_string())
+}
+
+pub fn resolve_gemini_path() -> Result<PathBuf, String> {
+    if let Ok(path) = which::which("gemini") {
+        return Ok(path);
+    }
+    let home = dirs::home_dir().unwrap_or_default();
+    let candidates = [
+        home.join(".local/bin/gemini"),
+        PathBuf::from("/usr/local/bin/gemini"),
+        PathBuf::from("/opt/homebrew/bin/gemini"),
+    ];
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
+    }
+    Err("Cannot find 'gemini' binary. Make sure Gemini CLI is installed.".to_string())
+}
+
+pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
+    match tool {
+        "gemini" => resolve_gemini_path(),
+        _ => resolve_claude_path(),
+    }
 }
 
 pub fn augmented_path() -> String {
@@ -79,8 +105,9 @@ impl PtySession {
         working_dir: String,
         session_id: String,
         yolo: bool,
+        tool: String,
     ) -> Result<Self, String> {
-        let claude_path = resolve_claude_path()?;
+        let tool_path = resolve_tool_path(&tool)?;
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -133,22 +160,47 @@ impl PtySession {
         let master: Arc<Mutex<Box<dyn MasterPty + Send>>> =
             Arc::new(Mutex::new(pair.master));
 
-        // Auto-send "claude" command after a short delay to let the shell initialize
+        // Auto-send CLI command after a short delay to let the shell initialize
         let writer_clone = writer.clone();
-        let claude_cmd = if yolo {
-            format!("{} --dangerously-skip-permissions\n", claude_path.display())
+        let cli_cmd = if tool == "gemini" {
+            format!("{}\n", tool_path.display())
+        } else if yolo {
+            format!("{} --dangerously-skip-permissions\n", tool_path.display())
         } else {
-            format!("{}\n", claude_path.display())
+            format!("{}\n", tool_path.display())
         };
         thread::spawn(move || {
             thread::sleep(std::time::Duration::from_millis(500));
             if let Ok(mut w) = writer_clone.lock() {
-                let _ = w.write_all(claude_cmd.as_bytes());
+                let _ = w.write_all(cli_cmd.as_bytes());
                 let _ = w.flush();
             }
         });
 
+        // Flag to track whether any output has been received (for startup timeout)
+        let has_output = Arc::new(AtomicBool::new(false));
+
+        // Startup timeout thread: if no output received within 30 seconds, emit pty-error
+        {
+            let app_timeout = app.clone();
+            let session_id_timeout = session_id.clone();
+            let has_output_clone = has_output.clone();
+            thread::spawn(move || {
+                thread::sleep(std::time::Duration::from_secs(30));
+                if !has_output_clone.load(Ordering::SeqCst) {
+                    let _ = app_timeout.emit(
+                        "pty-error",
+                        serde_json::json!({
+                            "id": session_id_timeout,
+                            "error": "Startup timeout: no output received within 30 seconds. The backend process may be stuck."
+                        }),
+                    );
+                }
+            });
+        }
+
         let app_clone = app.clone();
+        let has_output_reader = has_output.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             let mut remainder: Vec<u8> = Vec::new();
@@ -168,6 +220,9 @@ impl PtySession {
                         break;
                     }
                     Ok(n) => {
+                        // Mark that we received output (cancels startup timeout)
+                        has_output_reader.store(true, Ordering::SeqCst);
+
                         // Combine leftover bytes from previous read with new data
                         let mut combined = std::mem::take(&mut remainder);
                         combined.extend_from_slice(&buf[..n]);
@@ -189,7 +244,15 @@ impl PtySession {
                             );
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        // Emit detailed error event before exit
+                        let _ = app_clone.emit(
+                            "pty-error",
+                            serde_json::json!({
+                                "id": session_id,
+                                "error": format!("PTY read error: {}", e)
+                            }),
+                        );
                         let _ = app_clone
                             .emit("pty-exit", serde_json::json!({"id": session_id}));
                         break;

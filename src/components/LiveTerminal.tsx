@@ -6,10 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 
+type CliTool = "claude" | "gemini";
+
 interface LiveTerminalProps {
   workingDir: string;
   yolo?: boolean;
+  tool?: CliTool;
   onSessionStarted?: (id: string) => void;
+  onError?: (error: string) => void;
 }
 
 const TERM_FONT = "'JetBrains Mono NF', 'SF Mono', Menlo, Monaco, monospace";
@@ -61,13 +65,15 @@ function getTerminalTheme(isDark: boolean) {
   };
 }
 
-export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: LiveTerminalProps) {
+export default function LiveTerminal({ workingDir, yolo, tool, onSessionStarted, onError }: LiveTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const onSessionStartedRef = useRef(onSessionStarted);
   onSessionStartedRef.current = onSessionStarted;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -163,9 +169,13 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
       termRef.current = term;
       fitAddonRef.current = fitAddon;
 
+      // Track whether any output has been received (for frontend timeout warning)
+      let hasReceivedOutput = false;
+
       // Register listeners BEFORE starting session
       const outputUn = await listen<{ id: string; data: string }>("pty-output", (event) => {
         if (event.payload.id === sessionId) {
+          hasReceivedOutput = true;
           term!.write(event.payload.data);
         }
       });
@@ -178,9 +188,18 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
       });
       unlisteners.push(exitUn);
 
+      // Listen for pty-error events (backend timeout or read errors)
+      const errorUn = await listen<{ id: string; error: string }>("pty-error", (event) => {
+        if (event.payload.id === sessionId) {
+          term!.write(`\r\n\x1b[31m[Error] ${event.payload.error}\x1b[0m\r\n`);
+          if (onErrorRef.current) onErrorRef.current(event.payload.error);
+        }
+      });
+      unlisteners.push(errorUn);
+
       // Start PTY session
       try {
-        const id = await invoke<string>("start_session", { workingDir, yolo: yolo ?? false });
+        const id = await invoke<string>("start_session", { workingDir, yolo: yolo ?? false, tool: tool ?? "claude" });
         sessionId = id;
         sessionIdRef.current = id;
         setStarting(false);
@@ -191,6 +210,15 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
         }
 
         if (onSessionStartedRef.current) onSessionStartedRef.current(id);
+
+        // Frontend startup timeout: warn after 15 seconds if no output received
+        const startupTimeout = setTimeout(() => {
+          if (!hasReceivedOutput && !unmounted) {
+            term!.write("\r\n\x1b[33m[Warning] No output received after 15 seconds. The session may be starting slowly or stuck.\x1b[0m\r\n");
+            if (onErrorRef.current) onErrorRef.current("Startup timeout: no output received after 15 seconds");
+          }
+        }, 15_000);
+        unlisteners.push(() => clearTimeout(startupTimeout));
 
         const cols = term.cols;
         const rows = term.rows;
@@ -249,7 +277,7 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
       term?.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onSessionStarted is tracked via ref
-  }, [workingDir, yolo]);
+  }, [workingDir, yolo, tool]);
 
   if (error) {
     return (
@@ -276,7 +304,7 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
       )}
       {starting && (
         <div className="px-3 py-1 text-xs text-[var(--text-secondary)] bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
-          Starting Claude session...
+          Starting {tool === "gemini" ? "Gemini" : "Claude"} session...
         </div>
       )}
       <div className="flex-1 min-h-0 p-2">

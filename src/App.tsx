@@ -11,7 +11,7 @@ import FileTree from "./components/FileTree";
 import SkillsPanel from "./components/SkillsPanel";
 import BranchSwitcher from "./components/BranchSwitcher";
 import CommitHistory from "./components/CommitHistory";
-import TabBar, { type Tab } from "./components/TabBar";
+import TabBar, { type Tab, type CliTool } from "./components/TabBar";
 
 interface GitInfo {
   branch: string;
@@ -95,11 +95,15 @@ function App() {
     });
   }, []);
 
-  const handleStartTerminal = useCallback((tabId: string, yolo: boolean) => {
+  const handleStartTerminal = useCallback((tabId: string, yolo: boolean, tool: CliTool = "claude") => {
     setTerminalActivated((prev) => new Set(prev).add(tabId));
     setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo, status: "running" as const } : t))
+      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo, tool, status: "running" as const } : t))
     );
+  }, []);
+
+  const handleReorderTabs = useCallback((reordered: Tab[]) => {
+    setTabs(reordered);
   }, []);
 
   // Update a specific tab's status
@@ -141,6 +145,15 @@ function App() {
         }
       });
       unlisteners.push(exitUn);
+
+      // Listen for pty-error events to mark tab as errored
+      const errorUn = await listen<{ id: string; error: string }>("pty-error", (event) => {
+        const tabId = sessionTabMap.current.get(event.payload.id);
+        if (tabId) {
+          updateTabStatus(tabId, "error");
+        }
+      });
+      unlisteners.push(errorUn);
     };
 
     setupListeners();
@@ -324,12 +337,14 @@ function App() {
               />
             {showingTab && (
               <span className={`flex items-center gap-1.5 text-[10px] ${
+                activeTab.tool === "gemini" ? "text-[#4285F4]" :
                 activeTab.yolo ? "text-[var(--accent-orange)]" : "text-[var(--accent-green)]"
               }`}>
                 <span className={`inline-block w-1.5 h-1.5 rounded-full animate-pulse ${
+                  activeTab.tool === "gemini" ? "bg-[#4285F4]" :
                   activeTab.yolo ? "bg-[var(--accent-orange)]" : "bg-[var(--accent-green)]"
                 }`} />
-                {activeTab.mode === "chat" ? "chat" : activeTab.yolo ? "yolo" : "terminal"}
+                {activeTab.mode === "chat" ? "chat" : activeTab.tool === "gemini" ? "gemini" : activeTab.yolo ? "yolo" : "terminal"}
               </span>
             )}
             </div>
@@ -342,6 +357,7 @@ function App() {
               onSelectTab={handleSelectTab}
               onCloseTab={handleCloseTab}
               onNewTab={handleNewTab}
+              onReorderTabs={handleReorderTabs}
             />
           )}
 
@@ -378,7 +394,7 @@ function App() {
                       <div className="text-[10px] mb-6 text-[var(--text-muted)] truncate">
                         {tab.workingDir}
                       </div>
-                      <div className="flex gap-3 justify-center">
+                      <div className="flex gap-3 justify-center flex-wrap">
                         <button
                           onClick={() => handleStartTerminal(tab.id, false)}
                           className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
@@ -397,6 +413,15 @@ function App() {
                             Skip all permission prompts
                           </div>
                         </button>
+                        <button
+                          onClick={() => handleStartTerminal(tab.id, false, "gemini")}
+                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#4285F4] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                        >
+                          <div className="text-sm font-medium text-[#4285F4] mb-1">Gemini</div>
+                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                            Google Gemini CLI
+                          </div>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -413,7 +438,7 @@ function App() {
                   >
                     <div className="flex items-center justify-between px-4 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
                       <span className="text-xs text-[var(--text-secondary)]">
-                        {tab.yolo ? "YOLO Mode" : "Terminal Mode"}
+                        {tab.tool === "gemini" ? "Gemini CLI" : tab.yolo ? "YOLO Mode" : "Terminal Mode"}
                       </span>
                       <button
                         onClick={() => handleSwitchMode(tab.id, "chat")}
@@ -426,7 +451,9 @@ function App() {
                       <LiveTerminal
                       workingDir={tab.workingDir}
                       yolo={tab.yolo}
+                      tool={tab.tool}
                       onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
+                      onError={() => updateTabStatus(tab.id, "error")}
                     />
                     </div>
                   </div>
