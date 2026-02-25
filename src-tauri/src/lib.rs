@@ -441,7 +441,7 @@ fn get_commit_history(path: String, count: Option<u32>) -> Result<Vec<CommitEntr
 
 // ---- Update check ----
 
-const APP_VERSION: &str = "0.5.7";
+const APP_VERSION: &str = "0.5.8";
 
 #[derive(serde::Serialize)]
 struct UpdateInfo {
@@ -659,6 +659,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             sessions: Mutex::new(HashMap::new()),
             chats: Mutex::new(HashMap::new()),
