@@ -11,6 +11,7 @@ export default function StatusBar() {
   const [latestVersion, setLatestVersion] = useState("");
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [updateRef, setUpdateRef] = useState<Awaited<ReturnType<typeof check>> | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const cycleTheme = () => {
     setMode((prev) => {
@@ -35,9 +36,17 @@ export default function StatusBar() {
         setUpdateStatus("up-to-date");
         setTimeout(() => setUpdateStatus("idle"), 3000);
       }
-    } catch {
-      setUpdateStatus("error");
-      setTimeout(() => setUpdateStatus("idle"), 3000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Up to date") || msg.includes("up to date") || msg.includes("no update")) {
+        setUpdateStatus("up-to-date");
+        setTimeout(() => setUpdateStatus("idle"), 3000);
+      } else {
+        console.error("Update check error:", msg);
+        setUpdateStatus("error");
+        setErrorMsg(msg);
+        setTimeout(() => setUpdateStatus("idle"), 5000);
+      }
     }
   }, [updateStatus]);
 
@@ -107,7 +116,7 @@ export default function StatusBar() {
           </span>
         );
       case "error":
-        return <span className="text-[var(--accent-red)]">Update failed</span>;
+        return <span className="text-[var(--accent-red)]" title={errorMsg}>Update failed</span>;
       default:
         return null;
     }
@@ -117,7 +126,7 @@ export default function StatusBar() {
     <div className="flex-1 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-muted)]">
       <div className="flex items-center justify-between px-3 py-0.5 text-[10px]">
         <div className="flex items-center gap-3">
-          <span className="text-[var(--text-muted)]">v0.5.4</span>
+          <span className="text-[var(--text-muted)]">v0.5.5</span>
           <button
             onClick={handleCheckUpdate}
             disabled={updateStatus === "checking" || updateStatus === "downloading"}
