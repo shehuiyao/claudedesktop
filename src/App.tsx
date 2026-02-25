@@ -114,6 +114,9 @@ function App() {
     sessionTabMap.current.set(sessionId, tabId);
   }, []);
 
+  // Track which tabs have already transitioned from idle, to avoid re-renders on every pty-output
+  const activatedTabsRef = useRef<Set<string>>(new Set());
+
   // Listen for pty-output and pty-exit events to update tab status
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -121,13 +124,10 @@ function App() {
     const setupListeners = async () => {
       const outputUn = await listen<{ id: string; data: string }>("pty-output", (event) => {
         const tabId = sessionTabMap.current.get(event.payload.id);
-        if (tabId) {
-          // If tab is idle and we receive output, set to running
-          setTabs((prev) =>
-            prev.map((t) =>
-              t.id === tabId && t.status === "idle" ? { ...t, status: "running" } : t
-            )
-          );
+        if (tabId && !activatedTabsRef.current.has(tabId)) {
+          // Only update once: idle -> running, then never touch again from output events
+          activatedTabsRef.current.add(tabId);
+          updateTabStatus(tabId, "running");
         }
       });
       unlisteners.push(outputUn);
@@ -136,7 +136,7 @@ function App() {
         const tabId = sessionTabMap.current.get(event.payload.id);
         if (tabId) {
           updateTabStatus(tabId, "done");
-          // Clean up the mapping
+          activatedTabsRef.current.delete(tabId);
           sessionTabMap.current.delete(event.payload.id);
         }
       });
