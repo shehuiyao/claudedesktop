@@ -12,7 +12,7 @@ interface UpdateInfo {
   download_url: string;
 }
 
-const APP_VERSION = "0.6.0";
+const APP_VERSION = "0.6.1";
 
 export default function StatusBar() {
   const { mode, setMode } = useTheme();
