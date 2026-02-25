@@ -66,6 +66,8 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const onSessionStartedRef = useRef(onSessionStarted);
+  onSessionStartedRef.current = onSessionStarted;
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -188,7 +190,7 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
           return;
         }
 
-        if (onSessionStarted) onSessionStarted(id);
+        if (onSessionStartedRef.current) onSessionStartedRef.current(id);
 
         const cols = term.cols;
         const rows = term.rows;
@@ -246,7 +248,8 @@ export default function LiveTerminal({ workingDir, yolo, onSessionStarted }: Liv
       }
       term?.dispose();
     };
-  }, [workingDir, yolo, onSessionStarted]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- onSessionStarted is tracked via ref
+  }, [workingDir, yolo]);
 
   if (error) {
     return (
