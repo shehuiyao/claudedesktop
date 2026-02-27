@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/tauri-apps__tauri/tauri-v2/tooling/cli/schema.json",
   "productName": "Claude Desktop",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "identifier": "com.claude-desktop.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -47,7 +47,7 @@
       "endpoints": [
         "https://github.com/shehuiyao/claudedesktop/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5N0QxRkQzRjkyQzk0MzQKUldRMGxDejUweDk5MlJVTHRNZDNqaFJFa0hrN0xUeWNvTWlleEs1bW42cm41VkJuZlFuTHlVbC8K"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhCM0FGODc2RUIyMDgwOTEKUldTUmdDRHJkdmc2aTRwTkU4YTlsRnNCdEhxYlhHVnUyUWc2ckp5YjcrTnlFMUJxTXhRMWM2OGoK"
     }
   }
 }

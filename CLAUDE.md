@@ -12,13 +12,15 @@
 ## 开发规范
 
 ### 前后端通信
-- 前端调用后端命令统一使用 `invoke` (`@tauri-apps/api/core`)，不要直接使用 Tauri 插件的高级封装（如 `@tauri-apps/plugin-updater` 的 `check()`），除非确认插件所需的基础设施已完备
+- 前端调用后端命令统一使用 `invoke` (`@tauri-apps/api/core`)
+- 更新功能使用 `@tauri-apps/plugin-updater` 的 `check()` + `downloadAndInstall()` + `relaunch()`
 - 新增 Rust 命令后必须在 `lib.rs` 的 `tauri::generate_handler![]` 中注册
 
 ### 版本更新
-- 更新检查通过 Rust 后端 `check_for_update` 命令，走 GitHub API
-- 不使用 Tauri updater plugin 的前端 `check()` — 它依赖 Release 中的 `latest.json`，当前发布流程未包含该文件
-- 下载更新通过 `download_and_install_update` 命令，下载 DMG 后自动打开
+- 使用 Tauri Plugin Updater v2 标准方案，零自定义 Rust 代码
+- 前端通过 `check()` 检查更新，`downloadAndInstall()` 下载安装，`relaunch()` 重启
+- 依赖 GitHub Release 中的 `latest.json` 文件（发版时必须上传）
+- 构建时必须带签名私钥环境变量，生成 `.app.tar.gz` + `.sig` 签名文件
 
 ### 代码风格
 - React 组件使用函数式组件 + hooks
@@ -29,11 +31,10 @@
 
 当用户要求发布新版本时，按以下步骤执行：
 
-### 1. 更新版本号（4 处同步）
+### 1. 更新版本号（3 处同步）
 - `package.json` → `"version"`
 - `src-tauri/tauri.conf.json` → `"version"`
 - `src/components/StatusBar.tsx` → `APP_VERSION`
-- `src-tauri/src/lib.rs` → `APP_VERSION`
 
 ### 2. 提交并推送
 ```bash
@@ -42,23 +43,54 @@ git commit -m "chore: vX.Y.Z - 简要描述"
 git push
 ```
 
-### 3. 构建 DMG
+### 3. 构建（带签名）
 ```bash
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/key.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="your-password" \
 npm run tauri build
 ```
-- 构建产物：`src-tauri/target/release/bundle/dmg/Claude Desktop_X.Y.Z_aarch64.dmg`
-- 签名私钥缺失的报错可忽略（不影响 DMG 生成）
+- 构建产物目录：`src-tauri/target/release/bundle/`
+  - `dmg/Claude Desktop_X.Y.Z_aarch64.dmg`
+  - `macos/Claude Desktop.app.tar.gz`（更新包）
+  - `macos/Claude Desktop.app.tar.gz.sig`（签名文件）
 
-### 4. 创建 GitHub Release
+### 4. 生成 latest.json
 ```bash
-gh release create vX.Y.Z "src-tauri/target/release/bundle/dmg/Claude Desktop_X.Y.Z_aarch64.dmg" \
+cat > /tmp/latest.json << EOF
+{
+  "version": "X.Y.Z",
+  "notes": "更新说明",
+  "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "$(cat 'src-tauri/target/release/bundle/macos/Claude Desktop.app.tar.gz.sig')",
+      "url": "https://github.com/shehuiyao/claudedesktop/releases/download/vX.Y.Z/Claude.Desktop.app.tar.gz"
+    }
+  }
+}
+EOF
+```
+
+### 5. 创建 GitHub Release
+```bash
+gh release create vX.Y.Z \
+  "src-tauri/target/release/bundle/dmg/Claude Desktop_X.Y.Z_aarch64.dmg" \
+  "src-tauri/target/release/bundle/macos/Claude Desktop.app.tar.gz" \
+  "/tmp/latest.json" \
   --title "vX.Y.Z" \
   --notes "更新内容..."
 ```
 
-### 5. 验证
+### 6. 验证
 ```bash
-curl -s -H "User-Agent: claude-desktop-updater" \
-  https://api.github.com/repos/shehuiyao/claudedesktop/releases/latest
+# 验证 latest.json 可访问
+curl -sL https://github.com/shehuiyao/claudedesktop/releases/latest/download/latest.json | head
 ```
-确认 `tag_name` 为新版本，且 assets 中包含 DMG 文件。
+确认返回的 JSON 中 `version` 为新版本号。
+
+### 首次设置签名密钥
+如果还没有签名密钥，先生成：
+```bash
+npx tauri signer generate -w ~/.tauri/key.key
+```
+将输出的公钥（以 `dW50cnVzdGVkIGNvbW1lbnQ` 开头的 base64 字符串）填入 `tauri.conf.json` 的 `plugins.updater.pubkey`。
