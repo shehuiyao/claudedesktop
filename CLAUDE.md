@@ -27,6 +27,42 @@
 - 状态管理用 useState/useCallback/useRef，不引入额外状态库
 - CSS 使用 Tailwind + CSS 变量 (var(--xxx)) 支持主题切换
 
+### Git Commit 规范
+- **统一用中文**，不混用英文
+- **一个 commit 只做一件事**，不要把多个功能塞进一个 commit
+- **版本号不写进 commit message**，版本信息靠 git tag 管理
+- **标题说清目的**，不只描述操作，要说明为什么
+- 标题控制在 50 字以内，需要详细说明时用 body
+
+格式：
+```
+<type>: <简要描述，说清做了什么和为什么>
+
+可选的详细说明（空一行后写）
+```
+
+type 取值：
+- `feat`: 新功能
+- `fix`: 修复 bug
+- `chore`: 构建、依赖、配置等杂务
+- `docs`: 文档变更
+- `refactor`: 重构（不改功能）
+- `style`: 样式调整（不影响逻辑）
+
+好的示例：
+```
+feat: 技能面板支持按分类展开收起
+fix: 终端切换标签时文字被挤压，添加 resize 防抖
+chore: 移除 DMG 构建，仅生成 .app 更新包
+```
+
+不好的示例：
+```
+fix: 更新签名公钥                    ← 没说为什么要更新
+feat: v0.6.2 - 技能面板三分类、展开描述、项目级开关  ← 版本号不该在这、做了太多事
+chore: bump version                   ← 英文、太模糊
+```
+
 ## 版本发布流程
 
 当用户要求发布新版本时，按以下步骤执行：
@@ -39,7 +75,7 @@
 ### 2. 提交并推送
 ```bash
 git add -A
-git commit -m "chore: vX.Y.Z - 简要描述"
+git commit -m "chore: 简要描述本次发版的主要变更"
 git push
 ```
 

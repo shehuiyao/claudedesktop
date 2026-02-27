@@ -167,6 +167,71 @@ struct FileEntry {
     is_dir: bool,
 }
 
+#[derive(serde::Serialize)]
+struct RuleFile {
+    name: String,
+    path: String,
+    /// 规则来源："project" 表示项目根目录，"local" 表示 .claude/ 目录
+    source: String,
+}
+
+#[tauri::command]
+fn list_rule_files(project_path: String) -> Result<Vec<RuleFile>, String> {
+    let root = std::path::Path::new(&project_path);
+    let mut rules = Vec::new();
+
+    // 项目根目录的 CLAUDE.md
+    let claude_md = root.join("CLAUDE.md");
+    if claude_md.exists() {
+        rules.push(RuleFile {
+            name: "CLAUDE.md".to_string(),
+            path: claude_md.to_string_lossy().to_string(),
+            source: "project".to_string(),
+        });
+    }
+
+    // .claude/ 目录下的配置文件
+    let claude_dir = root.join(".claude");
+    if claude_dir.exists() && claude_dir.is_dir() {
+        // settings.json
+        let settings = claude_dir.join("settings.json");
+        if settings.exists() {
+            rules.push(RuleFile {
+                name: ".claude/settings.json".to_string(),
+                path: settings.to_string_lossy().to_string(),
+                source: "local".to_string(),
+            });
+        }
+        // settings.local.json
+        let settings_local = claude_dir.join("settings.local.json");
+        if settings_local.exists() {
+            rules.push(RuleFile {
+                name: ".claude/settings.local.json".to_string(),
+                path: settings_local.to_string_lossy().to_string(),
+                source: "local".to_string(),
+            });
+        }
+        // .claude/commands/ 目录下的 md 文件
+        let commands_dir = claude_dir.join("commands");
+        if commands_dir.exists() && commands_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&commands_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(".md") {
+                        rules.push(RuleFile {
+                            name: format!(".claude/commands/{}", name),
+                            path: entry.path().to_string_lossy().to_string(),
+                            source: "local".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(rules)
+}
+
 #[tauri::command]
 fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
     let dir_path = std::path::Path::new(&path);
@@ -695,6 +760,7 @@ pub fn run() {
             close_session,
             check_claude_installed,
             list_directory,
+            list_rule_files,
             list_skills,
             get_disabled_skills,
             toggle_skill_for_project,
