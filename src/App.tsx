@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Sidebar from "./components/Sidebar";
 import ChatArea from "./components/ChatArea";
-import ChatView from "./components/ChatView";
 import LiveTerminal from "./components/LiveTerminal";
 import StatusBar from "./components/StatusBar";
 import FileTree from "./components/FileTree";
@@ -162,15 +161,6 @@ function App() {
       unlisteners.forEach((fn) => fn());
     };
   }, [updateTabStatus]);
-
-  const handleSwitchMode = useCallback((tabId: string, mode: "chat" | "terminal") => {
-    if (mode === "terminal") {
-      setTerminalActivated((prev) => new Set(prev).add(tabId));
-    }
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, mode } : t))
-    );
-  }, []);
 
   const handleSelectHistorySession = useCallback(
     (projectSlug: string, sessionId: string) => {
@@ -335,18 +325,6 @@ function App() {
                 workingDir={workingDir}
                 onBranchSwitched={refreshGitInfo}
               />
-            {showingTab && (
-              <span className={`flex items-center gap-1.5 text-[10px] ${
-                activeTab.tool === "gemini" ? "text-[#4285F4]" :
-                activeTab.yolo ? "text-[var(--accent-orange)]" : "text-[var(--accent-green)]"
-              }`}>
-                <span className={`inline-block w-1.5 h-1.5 rounded-full animate-pulse ${
-                  activeTab.tool === "gemini" ? "bg-[#4285F4]" :
-                  activeTab.yolo ? "bg-[var(--accent-orange)]" : "bg-[var(--accent-green)]"
-                }`} />
-                {activeTab.mode === "chat" ? "chat" : activeTab.tool === "gemini" ? "gemini" : activeTab.yolo ? "yolo" : "terminal"}
-              </span>
-            )}
             </div>
           </div>
 
@@ -364,20 +342,6 @@ function App() {
           <div className="flex-1 flex overflow-hidden">
             {/* Main content area */}
             <div className="flex-1 relative overflow-hidden">
-              {/* Chat mode tabs */}
-              {tabs.map((tab) => (
-                <div
-                  key={`chat-${tab.id}`}
-                  className="absolute inset-0 flex"
-                  style={{ display: tab.id === activeTabId && tab.mode === "chat" ? "flex" : "none" }}
-                >
-                  <ChatView
-                    workingDir={tab.workingDir}
-                    onSwitchToTerminal={() => handleSwitchMode(tab.id, "terminal")}
-                  />
-                </div>
-              ))}
-
               {/* Mode picker - shown when tab is terminal mode but not yet activated */}
               {tabs
                 .filter((tab) => tab.mode === "terminal" && !terminalActivated.has(tab.id))
@@ -436,17 +400,6 @@ function App() {
                     className="absolute inset-0 flex flex-col"
                     style={{ display: tab.id === activeTabId && tab.mode === "terminal" ? "flex" : "none" }}
                   >
-                    <div className="flex items-center justify-between px-4 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-                      <span className="text-xs text-[var(--text-secondary)]">
-                        {tab.tool === "gemini" ? "Gemini CLI" : tab.yolo ? "YOLO Mode" : "Terminal Mode"}
-                      </span>
-                      <button
-                        onClick={() => handleSwitchMode(tab.id, "chat")}
-                        className="px-2 py-1 text-[10px] rounded-md bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150"
-                      >
-                        Switch to Chat
-                      </button>
-                    </div>
                     <div className="flex-1 overflow-hidden">
                       <LiveTerminal
                       workingDir={tab.workingDir}
