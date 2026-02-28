@@ -723,6 +723,149 @@ fn toggle_skill_for_project(project_path: String, skill_name: String, enabled: b
     Ok(())
 }
 
+// ---- 反馈系统 ----
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FeedbackEntry {
+    id: String,
+    content: String,
+    timestamp: String,
+}
+
+/// 提交反馈，保存到 ~/.claude-desktop/feedback.json
+#[tauri::command]
+fn submit_feedback(content: String) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let data_dir = home.join(".claude-desktop");
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let feedback_file = data_dir.join("feedback.json");
+    let mut feedbacks: Vec<FeedbackEntry> = if feedback_file.exists() {
+        let content = std::fs::read_to_string(&feedback_file).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    feedbacks.push(FeedbackEntry {
+        id: format!("fb-{}", chrono::Utc::now().timestamp_millis()),
+        content,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    let output = serde_json::to_string_pretty(&feedbacks)
+        .map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&feedback_file, output)
+        .map_err(|e| format!("写入失败: {}", e))?;
+    Ok(())
+}
+
+/// 获取所有反馈
+#[tauri::command]
+fn get_feedbacks() -> Result<Vec<FeedbackEntry>, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let feedback_file = home.join(".claude-desktop").join("feedback.json");
+    if !feedback_file.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&feedback_file)
+        .map_err(|e| format!("读取失败: {}", e))?;
+    let feedbacks: Vec<FeedbackEntry> = serde_json::from_str(&content).unwrap_or_default();
+    Ok(feedbacks)
+}
+
+// ---- 技能使用次数统计 ----
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SkillUsageMap {
+    counts: HashMap<String, u32>,
+}
+
+/// 记录技能使用一次
+#[tauri::command]
+fn record_skill_usage(skill_name: String) -> Result<u32, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let data_dir = home.join(".claude-desktop");
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let usage_file = data_dir.join("skill_usage.json");
+    let mut usage: SkillUsageMap = if usage_file.exists() {
+        let content = std::fs::read_to_string(&usage_file).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        SkillUsageMap::default()
+    };
+
+    let count = usage.counts.entry(skill_name).or_insert(0);
+    *count += 1;
+    let new_count = *count;
+
+    let output = serde_json::to_string_pretty(&usage)
+        .map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&usage_file, output)
+        .map_err(|e| format!("写入失败: {}", e))?;
+    Ok(new_count)
+}
+
+/// 获取所有技能的使用次数
+#[tauri::command]
+fn get_skill_usage() -> Result<HashMap<String, u32>, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let usage_file = home.join(".claude-desktop").join("skill_usage.json");
+    if !usage_file.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&usage_file)
+        .map_err(|e| format!("读取失败: {}", e))?;
+    let usage: SkillUsageMap = serde_json::from_str(&content).unwrap_or_default();
+    Ok(usage.counts)
+}
+
+// ---- Claude Code 使用统计 ----
+
+#[derive(serde::Serialize, Default)]
+struct UsageStats {
+    /// 今日消息数
+    today_messages: u64,
+    /// 今日会话数
+    today_sessions: u64,
+    /// 今日工具调用数
+    today_tool_calls: u64,
+}
+
+#[tauri::command]
+fn get_usage_stats() -> Result<UsageStats, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let stats_file = home.join(".claude").join("stats-cache.json");
+    if !stats_file.exists() {
+        return Ok(UsageStats::default());
+    }
+    let content = std::fs::read_to_string(&stats_file)
+        .map_err(|e| format!("读取统计失败: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析统计失败: {}", e))?;
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut stats = UsageStats::default();
+
+    if let Some(daily) = json.get("dailyActivity").and_then(|d| d.as_array()) {
+        for entry in daily {
+            if entry.get("date").and_then(|d| d.as_str()) == Some(&today) {
+                stats.today_messages = entry.get("messageCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                stats.today_sessions = entry.get("sessionCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                stats.today_tool_calls = entry.get("toolCallCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                break;
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
 #[tauri::command]
 fn reveal_in_finder(path: String) -> Result<(), String> {
     use std::process::Command;
@@ -773,6 +916,11 @@ pub fn run() {
             get_commit_history,
             reveal_in_finder,
             confirm_close,
+            submit_feedback,
+            get_feedbacks,
+            record_skill_usage,
+            get_skill_usage,
+            get_usage_stats,
         ])
         .on_window_event(|window, event| {
             match event {

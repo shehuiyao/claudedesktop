@@ -24,6 +24,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
+  const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
 
   const loadDisabled = useCallback(() => {
     if (!workingDir) return;
@@ -37,6 +38,10 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
       .then(setSkills)
       .catch(() => setSkills([]))
       .finally(() => setLoading(false));
+    // 加载使用次数
+    invoke<Record<string, number>>("get_skill_usage")
+      .then(setUsageCounts)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -118,6 +123,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
                     {group.skills.map((skill) => {
                       const isOpen = expanded.has(skill.name);
                       const isEnabled = !disabledSkills.has(skill.name);
+                      const count = usageCounts[skill.name] || 0;
                       return (
                         <div
                           key={skill.name}
@@ -141,6 +147,11 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
                             >
                               {skill.name}
                             </span>
+                            {count > 0 && (
+                              <span className="text-[10px] text-[var(--text-muted)] shrink-0" title="使用次数">
+                                {count}次
+                              </span>
+                            )}
                             {/* 开关 */}
                             {workingDir && (
                               <button

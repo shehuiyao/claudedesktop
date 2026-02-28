@@ -1,11 +1,12 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "done" | "error";
 
-const APP_VERSION = "0.6.6";
+const APP_VERSION = "0.6.7";
 
 export default function StatusBar() {
   const { mode, setMode } = useTheme();
@@ -15,6 +16,44 @@ export default function StatusBar() {
   const [errorMsg, setErrorMsg] = useState("");
   const updateRef = useRef<Update | null>(null);
   const checkCancelledRef = useRef(false);
+
+  // 使用统计
+  const [usageStats, setUsageStats] = useState<{ today_messages: number; today_sessions: number; today_tool_calls: number } | null>(null);
+
+  useEffect(() => {
+    const fetchStats = () => {
+      invoke<{ today_messages: number; today_sessions: number; today_tool_calls: number }>("get_usage_stats")
+        .then(setUsageStats)
+        .catch(() => {});
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 30000); // 每 30 秒刷新
+    return () => clearInterval(interval);
+  }, []);
+
+  // 反馈系统状态
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackDone, setFeedbackDone] = useState(false);
+
+  const handleSubmitFeedback = useCallback(async () => {
+    if (!feedbackText.trim()) return;
+    setFeedbackSubmitting(true);
+    try {
+      await invoke("submit_feedback", { content: feedbackText.trim() });
+      setFeedbackDone(true);
+      setFeedbackText("");
+      setTimeout(() => {
+        setShowFeedback(false);
+        setFeedbackDone(false);
+      }, 1500);
+    } catch {
+      // 静默失败
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }, [feedbackText]);
 
   const cycleTheme = () => {
     setMode((prev) => {
@@ -148,7 +187,7 @@ export default function StatusBar() {
   };
 
   return (
-    <div className="flex-1 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-muted)]">
+    <div className="flex-1 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-muted)] relative">
       <div className="flex items-center justify-between px-3 py-0.5 text-[10px]">
         <div className="flex items-center gap-3">
           <span className="text-[var(--text-muted)]">v{APP_VERSION}</span>
@@ -162,6 +201,23 @@ export default function StatusBar() {
           {renderUpdateContent()}
         </div>
         <div className="flex items-center gap-3">
+          {usageStats && (usageStats.today_messages > 0 || usageStats.today_sessions > 0) && (
+            <span
+              className="text-[var(--text-muted)]"
+              title={`今日: ${usageStats.today_messages} 消息 / ${usageStats.today_sessions} 会话 / ${usageStats.today_tool_calls} 工具调用`}
+            >
+              {usageStats.today_messages} msgs · {usageStats.today_tool_calls} tools
+            </span>
+          )}
+          <button
+            onClick={() => setShowFeedback(!showFeedback)}
+            className={`cursor-pointer transition-colors duration-150 bg-transparent border-none p-0 text-[10px] ${
+              showFeedback ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="提交反馈"
+          >
+            Feedback
+          </button>
           <button
             onClick={cycleTheme}
             className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer transition-colors duration-150 bg-transparent border-none p-0 text-[10px]"
@@ -171,6 +227,42 @@ export default function StatusBar() {
           </button>
         </div>
       </div>
+
+      {/* 反馈弹窗 */}
+      {showFeedback && (
+        <div className="absolute bottom-full right-0 mb-1 w-72 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-lg p-3 z-50">
+          {feedbackDone ? (
+            <div className="text-xs text-[var(--accent-green)] text-center py-2">
+              感谢反馈！
+            </div>
+          ) : (
+            <>
+              <div className="text-xs text-[var(--text-primary)] mb-2 font-medium">提交反馈</div>
+              <textarea
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                placeholder="描述你遇到的问题或建议..."
+                className="w-full h-20 text-xs bg-[var(--bg-primary)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-md p-2 resize-none outline-none focus:border-[var(--accent-cyan)] placeholder:text-[var(--text-muted)]"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && e.metaKey) handleSubmitFeedback();
+                  if (e.key === "Escape") setShowFeedback(false);
+                }}
+              />
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-[10px] text-[var(--text-muted)]">⌘Enter 提交</span>
+                <button
+                  onClick={handleSubmitFeedback}
+                  disabled={!feedbackText.trim() || feedbackSubmitting}
+                  className="px-3 py-1 text-[10px] rounded-md bg-[var(--accent-cyan)] text-[#0d1117] hover:brightness-110 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-default"
+                >
+                  {feedbackSubmitting ? "提交中..." : "提交"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

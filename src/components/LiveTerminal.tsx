@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 
 type CliTool = "claude" | "gemini";
@@ -78,44 +79,38 @@ export default function LiveTerminal({ workingDir, yolo, tool, onSessionStarted,
   const [starting, setStarting] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(true);
-  }, []);
+  // 使用 Tauri 原生拖放事件处理文件拖入（支持所有文件类型）
+  useEffect(() => {
+    const webview = getCurrentWebview();
+    const unlisteners: (() => void)[] = [];
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-
-    // Get file paths from the drop
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      // Collect all file paths, quote them if they contain spaces
-      const paths: string[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        // In Tauri/Electron, the File object has a `path` property
-        const filePath = (file as any).path;
-        if (filePath) {
-          // Quote path if it contains spaces
-          const quotedPath = filePath.includes(" ") ? `"${filePath}"` : filePath;
-          paths.push(quotedPath);
+    const setup = async () => {
+      const dragUn = await webview.onDragDropEvent((event) => {
+        if (event.payload.type === "over") {
+          setIsDragOver(true);
+        } else if (event.payload.type === "leave") {
+          setIsDragOver(false);
+        } else if (event.payload.type === "drop") {
+          setIsDragOver(false);
+          const filePaths = event.payload.paths;
+          if (filePaths.length > 0 && sessionIdRef.current) {
+            const quoted = filePaths.map((p: string) =>
+              p.includes(" ") ? `"${p}"` : p
+            );
+            invoke("send_input", {
+              sessionId: sessionIdRef.current,
+              data: quoted.join(" "),
+            }).catch(() => {});
+          }
         }
-      }
+      });
+      unlisteners.push(dragUn);
+    };
 
-      if (paths.length > 0 && sessionIdRef.current) {
-        const pathString = paths.join(" ");
-        invoke("send_input", { sessionId: sessionIdRef.current, data: pathString }).catch(() => {});
-      }
-    }
+    setup();
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
   }, []);
 
   useEffect(() => {
@@ -142,6 +137,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, onSessionStarted,
         drawBoldTextInBrightColors: false,
         cursorBlink: true,
         scrollback: 5000,
+        allowProposedApi: true,
       });
 
       fitAddon = new FitAddon();
@@ -297,9 +293,6 @@ export default function LiveTerminal({ workingDir, yolo, tool, onSessionStarted,
   return (
     <div
       className="h-full flex flex-col overflow-hidden relative"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
     >
       {/* Drop zone overlay */}
       {isDragOver && (
