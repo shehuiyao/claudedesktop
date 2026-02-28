@@ -6,7 +6,7 @@ import { useTheme } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "done" | "error";
 
-const APP_VERSION = "0.6.7";
+const APP_VERSION = "0.6.8";
 
 export default function StatusBar() {
   const { mode, setMode } = useTheme();
@@ -75,12 +75,8 @@ export default function StatusBar() {
     checkCancelledRef.current = false;
     setUpdateStatus("checking");
     try {
-      const update = await Promise.race([
-        check(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Update check timed out after 15 seconds")), 15000)
-        ),
-      ]);
+      // 不设前端超时，由用户手动 Cancel；网络慢时给足时间
+      const update = await check();
       if (checkCancelledRef.current) return;
       if (update) {
         updateRef.current = update;
