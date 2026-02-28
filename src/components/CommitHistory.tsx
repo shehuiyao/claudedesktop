@@ -60,16 +60,11 @@ export default function CommitHistory({ workingDir }: CommitHistoryProps) {
               key={commit.hash}
               className="px-3 py-1.5 hover:bg-[var(--bg-hover)] transition-colors duration-100"
             >
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono text-[var(--accent-cyan)] shrink-0">
-                  {commit.hash}
-                </span>
-                <span className="text-xs text-[var(--text-primary)] truncate">
-                  {commit.message}
-                </span>
+              <div className="text-xs text-[var(--text-primary)] truncate">
+                {commit.message}
               </div>
-              <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
-                {commit.author} · {commit.time_ago}
+              <div className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono">
+                {commit.hash} · {commit.author} · {commit.time_ago}
               </div>
             </div>
           ))

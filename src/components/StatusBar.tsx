@@ -6,7 +6,7 @@ import { useTheme } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "done" | "error";
 
-const APP_VERSION = "0.6.9";
+const APP_VERSION = "0.7.0";
 
 export default function StatusBar() {
   const { mode, setMode } = useTheme();

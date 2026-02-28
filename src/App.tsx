@@ -178,7 +178,7 @@ function App() {
         }
         // 检测 Claude Code 等待用户确认的提示（如工具调用审批）
         const data = event.payload.data;
-        if (/Do you want to proceed|Allow|Yes\/No|approve|deny|permit/i.test(data)) {
+        if (/Do you want to (proceed|make this|run|execute|allow)|Allow|Yes\/No|approve|deny|permit|\? \(y\/n\)|❯ 1\. Yes/i.test(data)) {
           waitingTabsRef.current.add(tabId);
           updateTabStatus(tabId, "waiting");
         } else if (waitingTabsRef.current.has(tabId) && data.trim().length > 2) {
