@@ -15,19 +15,23 @@ export interface Tab {
 interface TabBarProps {
   tabs: Tab[];
   activeTabId: string | null;
+  splitTabId?: string | null;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
   onReorderTabs?: (tabs: Tab[]) => void;
+  onDragStateChange?: (dragging: boolean, tabId: string | null) => void;
 }
 
 export default function TabBar({
   tabs,
   activeTabId,
+  splitTabId,
   onSelectTab,
   onCloseTab,
   onNewTab,
   onReorderTabs,
+  onDragStateChange,
 }: TabBarProps) {
   const [dragTabId, setDragTabId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -64,6 +68,7 @@ export default function TabBar({
         if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         isDraggingRef.current = true;
         setDragTabId(start.id);
+        onDragStateChange?.(true, start.id);
 
         // 计算偏移
         const tabEl = tabRefs.current.get(start.id);
@@ -108,6 +113,8 @@ export default function TabBar({
           }
         }
       }
+      // 通知父组件拖拽结束
+      onDragStateChange?.(false, null);
       // 重置状态
       pointerStartRef.current = null;
       isDraggingRef.current = false;
@@ -122,7 +129,7 @@ export default function TabBar({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [tabs, dropTargetId, dropSide, onReorderTabs]);
+  }, [tabs, dropTargetId, dropSide, onReorderTabs, onDragStateChange]);
 
   // 拖拽中的 tab 信息
   const dragTab = dragTabId ? tabs.find((t) => t.id === dragTabId) : null;
@@ -160,6 +167,9 @@ export default function TabBar({
               tab.status === "done" ? "bg-[var(--accent-blue)]" :
               "bg-[var(--text-muted)]"
             }`} />
+            {tab.id === splitTabId && (
+              <span className="text-[8px] text-[var(--accent-cyan)] ml-0.5" title="Split right">⫿</span>
+            )}
             <span className="truncate max-w-[120px]">{tab.label}</span>
             <button
               className={`ml-1 w-4 h-4 flex items-center justify-center rounded-sm text-[10px] leading-none cursor-pointer transition-all duration-150 ${
