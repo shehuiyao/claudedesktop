@@ -16,7 +16,9 @@ export function isClaudeConfirmationPrompt(windowText: string): boolean {
 
   const text = windowText.toLowerCase();
   const hasDoYouWant = /\bdo you want to\b/.test(text);
-  const hasYesNoList = /(?:❯\s*)?1\.\s*yes\b/.test(text) && /\b2\.\s*no\b/.test(text);
+  const hasYesOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*yes\b/.test(text);
+  const hasNoOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*no\b/.test(text);
+  const hasYesNoList = hasYesOption && hasNoOption;
   const hasYnInput = /[\(\[]\s*y\s*\/\s*n\s*[\)\]]/i.test(windowText);
   const hasConfirmContext = /\b(confirm|approval|permission|allow)\b/.test(text);
 
