@@ -15,16 +15,24 @@ export function isClaudeConfirmationPrompt(windowText: string): boolean {
   if (!windowText) return false;
 
   const text = windowText.toLowerCase();
-  const hasDoYouWant = /\bdo you want to\b/.test(text);
-  const hasYesOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*yes\b/.test(text);
-  const hasNoOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*no\b/.test(text);
-  const hasYesNoList = hasYesOption && hasNoOption;
-  const hasYnInput = /[\(\[]\s*y\s*\/\s*n\s*[\)\]]/i.test(windowText);
-  const hasConfirmContext = /\b(confirm|approval|permission|allow)\b/.test(text);
+  const hasConfirmCue =
+    /\b(do you want to|are you sure|proceed|continue|confirm|manual approval|approval|permission|allow|deny|approve|reject|choose an option|select an option)\b/.test(
+      text,
+    );
 
-  if (hasDoYouWant && (hasYesNoList || hasYnInput)) return true;
-  if (hasYesNoList && (hasDoYouWant || hasConfirmContext)) return true;
-  if (hasYnInput && (hasDoYouWant || hasConfirmContext)) return true;
+  const hasYnInput =
+    /[\(\[]\s*y(?:es)?\s*\/\s*n(?:o)?\s*[\)\]]/i.test(windowText) ||
+    /\b[yY]\s*\/\s*[nN]\b/.test(windowText);
+
+  const hasYesLikeOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*(yes|proceed|continue|allow|approve)\b/.test(text);
+  const hasNoLikeOption = /(?:^|\s)(?:❯\s*)?\d+\.\s*(no|cancel|deny|reject)\b/.test(text);
+  const hasBinaryChoiceList = hasYesLikeOption && hasNoLikeOption;
+
+  const hasPromptFooter = /\b(esc to cancel|tab to amend)\b/.test(text);
+
+  if (hasConfirmCue && (hasYnInput || hasBinaryChoiceList)) return true;
+  if (hasBinaryChoiceList && hasPromptFooter) return true;
+  if (hasYnInput && hasConfirmCue) return true;
 
   return false;
 }

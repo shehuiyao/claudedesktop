@@ -140,6 +140,7 @@ export default function TabBar({
         const isActive = tab.id === activeTabId;
         const isDragging = tab.id === dragTabId;
         const isDropTarget = tab.id === dropTargetId && dragTabId !== null && dragTabId !== tab.id;
+        const isWaiting = tab.status === "waiting";
         return (
           <div
             key={tab.id}
@@ -171,7 +172,9 @@ export default function TabBar({
             {tab.id === splitTabId && (
               <span className="text-[8px] text-[var(--accent-cyan)] ml-0.5" title="Split right">⫿</span>
             )}
-            <span className="truncate max-w-[120px]">{tab.label}</span>
+            <span className={`truncate max-w-[120px] ${isWaiting ? "text-[var(--accent-orange,#f59e0b)] font-medium" : ""}`}>
+              {tab.label}
+            </span>
             <button
               className={`ml-1 w-4 h-4 flex items-center justify-center rounded-sm text-[10px] leading-none cursor-pointer transition-all duration-150 ${
                 isActive
