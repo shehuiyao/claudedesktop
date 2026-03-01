@@ -12,12 +12,15 @@ import BranchSwitcher from "./components/BranchSwitcher";
 import CommitHistory from "./components/CommitHistory";
 import TabBar, { type Tab, type CliTool } from "./components/TabBar";
 import SplitDivider from "./components/SplitDivider";
+import { isClaudeConfirmationPrompt, normalizeTerminalText } from "./utils/terminalPromptDetector";
 
 interface GitInfo {
   branch: string;
   additions: number;
   deletions: number;
 }
+
+const SESSION_TAIL_MAX_CHARS = 1200;
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -36,6 +39,15 @@ function App() {
   const [terminalActivated, setTerminalActivated] = useState<Set<string>>(new Set());
   // Map sessionId -> tabId for correlating pty events to tabs
   const sessionTabMap = useRef<Map<string, string>>(new Map());
+  // Keep the latest tabs snapshot for event listeners without re-subscribing
+  const tabsRef = useRef<Tab[]>(tabs);
+  tabsRef.current = tabs;
+  // Track which tabs have already transitioned from idle, to avoid re-renders on every pty-output
+  const activatedTabsRef = useRef<Set<string>>(new Set());
+  // Track which tabs are in waiting state
+  const waitingTabsRef = useRef<Set<string>>(new Set());
+  // Rolling text window per session to detect prompts across split chunks
+  const sessionTailRef = useRef<Map<string, string>>(new Map());
 
   // 分屏状态
   const [splitTabId, setSplitTabId] = useState<string | null>(null);
@@ -87,10 +99,13 @@ function App() {
         next.delete(tabId);
         return next;
       });
+      waitingTabsRef.current.delete(tabId);
+      activatedTabsRef.current.delete(tabId);
       // Clean up session-to-tab mappings for this tab
       for (const [sessionId, mappedTabId] of sessionTabMap.current.entries()) {
         if (mappedTabId === tabId) {
           sessionTabMap.current.delete(sessionId);
+          sessionTailRef.current.delete(sessionId);
         }
       }
     },
@@ -149,9 +164,15 @@ function App() {
 
   // Update a specific tab's status
   const updateTabStatus = useCallback((tabId: string, status: Tab["status"]) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, status } : t))
-    );
+    setTabs((prev) => {
+      let changed = false;
+      const next = prev.map((t) => {
+        if (t.id !== tabId || t.status === status) return t;
+        changed = true;
+        return { ...t, status };
+      });
+      return changed ? next : prev;
+    });
   }, []);
 
   // Called when a LiveTerminal session starts - maps sessionId to tabId
@@ -159,10 +180,16 @@ function App() {
     sessionTabMap.current.set(sessionId, tabId);
   }, []);
 
-  // Track which tabs have already transitioned from idle, to avoid re-renders on every pty-output
-  const activatedTabsRef = useRef<Set<string>>(new Set());
-  // Track which tabs are in waiting state, to restore running on next meaningful output
-  const waitingTabsRef = useRef<Set<string>>(new Set());
+  const handleTerminalUserInput = useCallback((payload: { sessionId: string | null; data: string }) => {
+    if (!payload.sessionId || !payload.data) return;
+    const tabId = sessionTabMap.current.get(payload.sessionId);
+    if (!tabId || !waitingTabsRef.current.has(tabId)) return;
+
+    waitingTabsRef.current.delete(tabId);
+    // Clear prompt tail so old prompt text does not immediately re-trigger waiting.
+    sessionTailRef.current.delete(payload.sessionId);
+    updateTabStatus(tabId, "running");
+  }, [updateTabStatus]);
 
   // Listen for pty-output and pty-exit events to update tab status
   useEffect(() => {
@@ -172,18 +199,28 @@ function App() {
       const outputUn = await listen<{ id: string; data: string }>("pty-output", (event) => {
         const tabId = sessionTabMap.current.get(event.payload.id);
         if (!tabId) return;
+
+        const tab = tabsRef.current.find((t) => t.id === tabId);
+        const currentTool = tab?.tool ?? "claude";
+        if (currentTool !== "claude") return;
+
         if (!activatedTabsRef.current.has(tabId)) {
           activatedTabsRef.current.add(tabId);
           updateTabStatus(tabId, "running");
         }
-        // 检测 Claude Code 等待用户确认的提示（如工具调用审批）
-        // 先剥离 ANSI 转义码，再匹配结构性特征，避免颜色码干扰匹配
-        const cleanData = event.payload.data.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\][^\x1b]*\x1b\\/g, "");
-        if (/Do you want to |❯\s*\d+\.\s*Yes|\(\s*y\s*\/\s*n\s*\)/i.test(cleanData)) {
+
+        const normalized = normalizeTerminalText(event.payload.data);
+        if (!normalized) return;
+
+        const prevTail = sessionTailRef.current.get(event.payload.id) ?? "";
+        const nextTail = `${prevTail} ${normalized}`.slice(-SESSION_TAIL_MAX_CHARS);
+        sessionTailRef.current.set(event.payload.id, nextTail);
+
+        if (isClaudeConfirmationPrompt(nextTail)) {
           waitingTabsRef.current.add(tabId);
           updateTabStatus(tabId, "waiting");
-        } else if (waitingTabsRef.current.has(tabId) && cleanData.trim().length > 2) {
-          // 用户确认后收到新输出，恢复 running
+        } else if (waitingTabsRef.current.has(tabId) && normalized.length > 2) {
+          // Fallback: if prompt ended and new meaningful output appears, restore running.
           waitingTabsRef.current.delete(tabId);
           updateTabStatus(tabId, "running");
         }
@@ -195,7 +232,9 @@ function App() {
         if (tabId) {
           updateTabStatus(tabId, "done");
           activatedTabsRef.current.delete(tabId);
+          waitingTabsRef.current.delete(tabId);
           sessionTabMap.current.delete(event.payload.id);
+          sessionTailRef.current.delete(event.payload.id);
         }
       });
       unlisteners.push(exitUn);
@@ -205,6 +244,7 @@ function App() {
         const tabId = sessionTabMap.current.get(event.payload.id);
         if (tabId) {
           updateTabStatus(tabId, "error");
+          waitingTabsRef.current.delete(tabId);
         }
       });
       unlisteners.push(errorUn);
@@ -271,8 +311,6 @@ function App() {
   }, [workingDir]);
 
   // Refs to keep the keydown handler in sync with latest state
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
 
@@ -489,6 +527,7 @@ function App() {
                           tool={tab.tool}
                           onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
                           onError={() => updateTabStatus(tab.id, "error")}
+                          onUserInput={handleTerminalUserInput}
                         />
                       </div>
                     </div>
