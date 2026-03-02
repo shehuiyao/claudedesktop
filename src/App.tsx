@@ -29,6 +29,7 @@ function App() {
   const [workingDir, setWorkingDir] = useState<string | null>(null);
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [tabToClose, setTabToClose] = useState<string | null>(null);
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -73,7 +74,7 @@ function App() {
     }
   }, []);
 
-  const handleCloseTab = useCallback(
+  const doCloseTab = useCallback(
     (tabId: string) => {
       setTabs((prev) => {
         const remaining = prev.filter((t) => t.id !== tabId);
@@ -104,6 +105,13 @@ function App() {
       }
     },
     [activeTabId, splitTabId],
+  );
+
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      setTabToClose(tabId);
+    },
+    [],
   );
 
   const handleSelectTab = useCallback((tabId: string) => {
@@ -616,6 +624,44 @@ function App() {
           Files
         </button>
       </div>
+
+      {/* Tab close confirmation modal */}
+      {tabToClose && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+          onClick={() => setTabToClose(null)}
+        >
+          <div
+            className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-medium text-[var(--text-primary)] mb-2">
+              关闭终端？
+            </div>
+            <div className="text-xs text-[var(--text-muted)] mb-6">
+              确定要关闭「{tabs.find((t) => t.id === tabToClose)?.label ?? ""}」吗？正在运行的会话将被终止。
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setTabToClose(null)}
+                className="px-4 py-1.5 text-xs rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 border border-[var(--border-subtle)]"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  doCloseTab(tabToClose);
+                  setTabToClose(null);
+                }}
+                className="px-4 py-1.5 text-xs rounded-lg bg-red-600 text-white hover:bg-red-500 cursor-pointer transition-colors duration-150"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Close confirmation modal */}
       {showCloseConfirm && (
