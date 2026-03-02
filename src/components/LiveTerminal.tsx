@@ -255,17 +255,26 @@ export default function LiveTerminal({ workingDir, yolo, tool, onSessionStarted,
 
       // Handle resize — debounce to avoid fitting with stale dimensions during tab switch
       let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+      let wasHidden = true;
       observer = new ResizeObserver(() => {
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
           const el = containerRef.current;
-          if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+          if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) {
+            wasHidden = true;
+            return;
+          }
           fitAddon!.fit();
           if (sessionIdRef.current) {
             const cols = term!.cols;
             const rows = term!.rows;
             invoke("resize_session", { sessionId: sessionIdRef.current, rows, cols }).catch(() => {});
           }
+          // 从隐藏变为可见时自动聚焦终端（tab 切换场景）
+          if (wasHidden) {
+            term!.focus();
+          }
+          wasHidden = false;
         }, 50);
       });
       observer.observe(containerRef.current!);

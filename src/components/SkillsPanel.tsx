@@ -19,13 +19,56 @@ const CATEGORIES = [
   { key: "personal", label: "自定义", color: "var(--accent-green)" },
 ] as const;
 
+/** 小型 toggle 开关 */
+function MiniToggle({
+  on,
+  color,
+  disabled,
+  label,
+  title,
+  onClick,
+}: {
+  on: boolean;
+  color: string;
+  disabled?: boolean;
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`shrink-0 flex items-center gap-0.5 ${disabled ? "opacity-30 cursor-not-allowed" : "cursor-pointer"}`}
+      title={title}
+    >
+      <span className="text-[9px] text-[var(--text-muted)] select-none">{label}</span>
+      <div
+        className="relative w-6 h-3.5 rounded-full transition-colors duration-200"
+        style={{
+          backgroundColor: on && !disabled ? color : "var(--bg-hover, #3f3f46)",
+        }}
+      >
+        <div
+          className="absolute top-[2px] w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-200"
+          style={{
+            transform: on && !disabled ? "translateX(11px)" : "translateX(2px)",
+          }}
+        />
+      </div>
+    </button>
+  );
+}
+
 export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
+  const [globalDisabledSkills, setGlobalDisabledSkills] = useState<Set<string>>(new Set());
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
 
+  // 加载项目级禁用列表
   const loadDisabled = useCallback(() => {
     if (!workingDir) return;
     invoke<string[]>("get_disabled_skills", { projectPath: workingDir })
@@ -33,16 +76,23 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
       .catch(() => {});
   }, [workingDir]);
 
+  // 加载全局禁用列表
+  const loadGlobalDisabled = useCallback(() => {
+    invoke<string[]>("get_global_disabled_skills")
+      .then((list) => setGlobalDisabledSkills(new Set(list)))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     invoke<SkillInfo[]>("list_skills")
       .then(setSkills)
       .catch(() => setSkills([]))
       .finally(() => setLoading(false));
-    // 加载使用次数
     invoke<Record<string, number>>("get_skill_usage")
       .then(setUsageCounts)
       .catch(() => {});
-  }, []);
+    loadGlobalDisabled();
+  }, [loadGlobalDisabled]);
 
   useEffect(() => {
     loadDisabled();
@@ -57,6 +107,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
     });
   };
 
+  // 项目级开关
   const toggleSkill = async (skillName: string, currentlyEnabled: boolean) => {
     if (!workingDir) return;
     try {
@@ -66,6 +117,19 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
         enabled: !currentlyEnabled,
       });
       loadDisabled();
+    } catch {
+      // 静默失败
+    }
+  };
+
+  // 全局开关
+  const toggleGlobalSkill = async (skillName: string, currentlyEnabled: boolean) => {
+    try {
+      await invoke("toggle_global_skill", {
+        skillName,
+        enabled: !currentlyEnabled,
+      });
+      loadGlobalDisabled();
     } catch {
       // 静默失败
     }
@@ -92,6 +156,14 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
         >
           ✕
         </button>
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <span className="text-[10px] text-[var(--text-muted)]">G = 全局开关</span>
+        {workingDir && (
+          <span className="text-[10px] text-[var(--text-muted)]">P = 项目开关</span>
+        )}
       </div>
 
       {/* Content */}
@@ -122,14 +194,16 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
                   <div className="grid gap-1.5">
                     {group.skills.map((skill) => {
                       const isOpen = expanded.has(skill.name);
-                      const isEnabled = !disabledSkills.has(skill.name);
+                      const globalEnabled = !globalDisabledSkills.has(skill.name);
+                      const projectEnabled = !disabledSkills.has(skill.name);
+                      const isEnabled = globalEnabled && projectEnabled;
                       const count = usageCounts[skill.name] || 0;
                       return (
                         <div
                           key={skill.name}
                           className="rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)] overflow-hidden"
                         >
-                          <div className="flex items-center gap-3 px-3 py-2">
+                          <div className="flex items-center gap-2 px-3 py-2">
                             <span
                               className="w-2 h-2 rounded-full shrink-0"
                               style={{
@@ -152,29 +226,30 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
                                 {count}次
                               </span>
                             )}
-                            {/* 开关 */}
+                            {/* 全局开关 */}
+                            <MiniToggle
+                              on={globalEnabled}
+                              color={group.color}
+                              label="G"
+                              title={globalEnabled ? "全局禁用此技能" : "全局启用此技能"}
+                              onClick={() => toggleGlobalSkill(skill.name, globalEnabled)}
+                            />
+                            {/* 项目级开关 */}
                             {workingDir && (
-                              <button
-                                onClick={() => toggleSkill(skill.name, isEnabled)}
-                                className="shrink-0 cursor-pointer"
-                                title={isEnabled ? "在此项目中禁用" : "在此项目中启用"}
-                              >
-                                <div
-                                  className="relative w-7 h-4 rounded-full transition-colors duration-200"
-                                  style={{
-                                    backgroundColor: isEnabled
-                                      ? group.color
-                                      : "var(--bg-hover, #3f3f46)",
-                                  }}
-                                >
-                                  <div
-                                    className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-200"
-                                    style={{
-                                      transform: isEnabled ? "translateX(14px)" : "translateX(2px)",
-                                    }}
-                                  />
-                                </div>
-                              </button>
+                              <MiniToggle
+                                on={projectEnabled}
+                                color={group.color}
+                                disabled={!globalEnabled}
+                                label="P"
+                                title={
+                                  !globalEnabled
+                                    ? "全局已禁用，请先全局启用"
+                                    : projectEnabled
+                                      ? "在此项目中禁用"
+                                      : "在此项目中启用"
+                                }
+                                onClick={() => toggleSkill(skill.name, projectEnabled)}
+                              />
                             )}
                             {/* 展开箭头 */}
                             {skill.description && (

@@ -8,9 +8,10 @@ use std::thread;
 use tauri::{AppHandle, Emitter};
 
 const CONFIRMATION_TAIL_MAX_CHARS: usize = 2000;
-const CONFIRMATION_CUES: [&str; 13] = [
+const CONFIRMATION_CUES: [&str; 14] = [
     "do you want to",
     "do you want to make this edit",
+    "would you like to proceed",
     "are you sure",
     "proceed",
     "continue",
@@ -64,6 +65,11 @@ fn any_choice_option_re() -> &'static Regex {
     })
 }
 
+fn numbered_option_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)(?:^|\s)\d+[.)]\s+\S").expect("valid numbered option regex"))
+}
+
 fn strip_ansi(input: &str) -> String {
     ansi_re().replace_all(input, "").into_owned()
 }
@@ -104,8 +110,16 @@ fn is_confirmation_prompt(window_text: &str) -> bool {
     let has_any_choice_option = any_choice_option_re().is_match(window_text);
     let has_binary_choice_list = has_yes_like_option && has_no_like_option;
     let has_prompt_footer = text.contains("esc to cancel") || text.contains("tab to amend");
+    let has_numbered_options = numbered_option_re().find_iter(window_text).count() >= 2;
+    let has_proceed_question = text.contains("would you like to proceed");
 
     if has_edit_confirm_cue && (has_any_choice_option || has_prompt_footer || has_yn_input) {
+        return true;
+    }
+    if has_proceed_question && has_numbered_options && has_any_choice_option {
+        return true;
+    }
+    if has_confirm_cue && has_numbered_options && has_any_choice_option {
         return true;
     }
     if has_confirm_cue && (has_yn_input || has_binary_choice_list || has_prompt_footer) {

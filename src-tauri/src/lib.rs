@@ -72,7 +72,9 @@ fn send_input(
     match sessions.get(&session_id) {
         Some(session) => {
             let result = session.write(&data);
-            if result.is_ok() {
+            // Only clear waiting confirmation on submitted input (Enter).
+            // Focus/blur control sequences can also arrive as input and should not clear waiting.
+            if result.is_ok() && (data.contains('\r') || data.contains('\n')) {
                 let _ = app.emit(
                     "pty-awaiting-confirmation",
                     serde_json::json!({ "id": &session_id, "waiting": false }),
@@ -733,6 +735,88 @@ fn toggle_skill_for_project(project_path: String, skill_name: String, enabled: b
     Ok(())
 }
 
+// ---- 全局技能开关 ----
+
+#[tauri::command]
+fn get_global_disabled_skills() -> Result<Vec<String>, String> {
+    let settings_path = dirs::home_dir()
+        .ok_or("无法获取 home 目录")?
+        .join(".claude")
+        .join("settings.json");
+    if !settings_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("读取全局配置失败: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析全局配置失败: {}", e))?;
+    let mut disabled = Vec::new();
+    if let Some(deny) = json.get("permissions").and_then(|p| p.get("deny")).and_then(|d| d.as_array()) {
+        for item in deny {
+            if let Some(s) = item.as_str() {
+                if let Some(name) = s.strip_prefix("Skill(").and_then(|r| r.strip_suffix(')')) {
+                    disabled.push(name.to_string());
+                }
+            }
+        }
+    }
+    Ok(disabled)
+}
+
+#[tauri::command]
+fn toggle_global_skill(skill_name: String, enabled: bool) -> Result<(), String> {
+    let claude_dir = dirs::home_dir()
+        .ok_or("无法获取 home 目录")?
+        .join(".claude");
+    if !claude_dir.exists() {
+        std::fs::create_dir_all(&claude_dir)
+            .map_err(|e| format!("创建 .claude 目录失败: {}", e))?;
+    }
+    let settings_path = claude_dir.join("settings.json");
+    let mut json: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("读取全局配置失败: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let skill_entry = format!("Skill({})", skill_name);
+
+    if json.get("permissions").is_none() {
+        json["permissions"] = serde_json::json!({});
+    }
+    if json["permissions"].get("deny").is_none() {
+        json["permissions"]["deny"] = serde_json::json!([]);
+    }
+
+    let deny = json["permissions"]["deny"].as_array_mut()
+        .ok_or("deny 字段类型异常")?;
+
+    if enabled {
+        deny.retain(|v| v.as_str() != Some(&skill_entry));
+    } else {
+        if !deny.iter().any(|v| v.as_str() == Some(&skill_entry)) {
+            deny.push(serde_json::Value::String(skill_entry));
+        }
+    }
+
+    if deny.is_empty() {
+        if let Some(perms) = json.get_mut("permissions").and_then(|p| p.as_object_mut()) {
+            perms.remove("deny");
+            if perms.is_empty() {
+                json.as_object_mut().unwrap().remove("permissions");
+            }
+        }
+    }
+
+    let output = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&settings_path, output)
+        .map_err(|e| format!("写入全局配置失败: {}", e))?;
+    Ok(())
+}
+
 // ---- 反馈系统 ----
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -940,6 +1024,8 @@ pub fn run() {
             list_skills,
             get_disabled_skills,
             toggle_skill_for_project,
+            get_global_disabled_skills,
+            toggle_global_skill,
             get_git_info,
             chat_send,
             chat_stop,
