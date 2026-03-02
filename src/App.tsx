@@ -370,7 +370,7 @@ function App() {
   const showWelcome = !showingTab && !activeSessionId;
 
   return (
-    <div className="flex flex-col h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="flex flex-col h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]" onContextMenu={(e) => e.preventDefault()}>
       <div className="flex flex-1 overflow-hidden">
         {sidebarOpen && (
           <Sidebar
