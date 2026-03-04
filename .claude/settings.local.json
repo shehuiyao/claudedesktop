@@ -18,7 +18,8 @@
       "Bash(bash:*)",
       "Bash(crontab:*)",
       "Skill(xy-bug-track)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(node:*)"
     ]
   }
 }

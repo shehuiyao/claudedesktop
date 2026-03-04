@@ -1056,12 +1056,17 @@ fn get_bugs_json_path(working_dir: &str) -> Result<std::path::PathBuf, String> {
         return Err("无法获取当前 git 分支名".to_string());
     }
 
-    // bugs 目录在项目上一层的 Task/{BRANCH}/bugs/ 下
+    // bugs 目录在项目上一层的 Task/{PROJECT_NAME}-{BRANCH}/bugs/ 下
     let project_dir = std::path::Path::new(working_dir);
+    let project_name = project_dir
+        .file_name()
+        .ok_or("无法获取项目名")?
+        .to_string_lossy();
     let parent_dir = project_dir.parent().ok_or("无法获取项目上级目录")?;
+    let folder_name = format!("{}-{}", project_name, branch);
     let bugs_json = parent_dir
         .join("Task")
-        .join(&branch)
+        .join(&folder_name)
         .join("bugs")
         .join("bugs.json");
 
