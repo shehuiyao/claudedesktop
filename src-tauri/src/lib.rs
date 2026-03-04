@@ -318,37 +318,19 @@ fn get_git_info(path: String) -> Result<GitInfo, String> {
         .trim()
         .to_string();
 
+    let mut additions: i64 = 0;
+    let mut deletions: i64 = 0;
+
+    // git diff --numstat HEAD 包含 staged + unstaged 所有变更
     let diff_output = Command::new("git")
         .args(["diff", "--numstat", "HEAD"])
         .current_dir(&path)
         .output()
         .map_err(|e| format!("Failed to run git diff: {}", e))?;
 
-    let mut additions: i64 = 0;
-    let mut deletions: i64 = 0;
-
-    let diff_text = String::from_utf8_lossy(&diff_output.stdout);
-    for line in diff_text.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            if let Ok(add) = parts[0].parse::<i64>() {
-                additions += add;
-            }
-            if let Ok(del) = parts[1].parse::<i64>() {
-                deletions += del;
-            }
-        }
-    }
-
-    let unstaged_output = Command::new("git")
-        .args(["diff", "--numstat"])
-        .current_dir(&path)
-        .output()
-        .map_err(|e| format!("Failed to run git diff: {}", e))?;
-
-    if !diff_output.status.success() {
-        let unstaged_text = String::from_utf8_lossy(&unstaged_output.stdout);
-        for line in unstaged_text.lines() {
+    if diff_output.status.success() {
+        let diff_text = String::from_utf8_lossy(&diff_output.stdout);
+        for line in diff_text.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
                 if let Ok(add) = parts[0].parse::<i64>() {
@@ -356,6 +338,24 @@ fn get_git_info(path: String) -> Result<GitInfo, String> {
                 }
                 if let Ok(del) = parts[1].parse::<i64>() {
                     deletions += del;
+                }
+            }
+        }
+    } else {
+        // HEAD 不存在（新仓库无 commit），分别统计 staged 和 unstaged
+        for args in &[vec!["diff", "--cached", "--numstat"], vec!["diff", "--numstat"]] {
+            if let Ok(output) = Command::new("git").args(args).current_dir(&path).output() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    let parts: Vec<&str> = line.split('\t').collect();
+                    if parts.len() >= 2 {
+                        if let Ok(add) = parts[0].parse::<i64>() {
+                            additions += add;
+                        }
+                        if let Ok(del) = parts[1].parse::<i64>() {
+                            deletions += del;
+                        }
+                    }
                 }
             }
         }
@@ -1040,10 +1040,10 @@ fn get_bugs_json_path(working_dir: &str) -> Result<std::path::PathBuf, String> {
         return Err("无法获取当前 git 分支名".to_string());
     }
 
-    let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
-    let bugs_json = home
-        .join("Desktop")
-        .join("sengo")
+    // bugs 目录在项目上一层的 Task/{BRANCH}/bugs/ 下
+    let project_dir = std::path::Path::new(working_dir);
+    let parent_dir = project_dir.parent().ok_or("无法获取项目上级目录")?;
+    let bugs_json = parent_dir
         .join("Task")
         .join(&branch)
         .join("bugs")
