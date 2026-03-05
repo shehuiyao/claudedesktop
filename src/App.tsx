@@ -11,6 +11,7 @@ import SkillsPanel from "./components/SkillsPanel";
 import BranchSwitcher from "./components/BranchSwitcher";
 import CommitHistory from "./components/CommitHistory";
 import BugTrackerPanel from "./components/BugTrackerPanel";
+import QuickActionsPanel from "./components/QuickActionsPanel";
 import TabBar, { type Tab, type CliTool } from "./components/TabBar";
 import SplitDivider from "./components/SplitDivider";
 
@@ -26,6 +27,7 @@ function App() {
   const [showSkills, setShowSkills] = useState(false);
   const [showCommits, setShowCommits] = useState(false);
   const [showBugTracker, setShowBugTracker] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<string | null>(null);
   const [workingDir, setWorkingDir] = useState<string | null>(null);
@@ -331,6 +333,12 @@ function App() {
           setShowFileTree((prev) => !prev);
           break;
         }
+        case "A": {
+          // Cmd+Shift+A 切换快捷按钮面板
+          e.preventDefault();
+          setShowQuickActions((prev) => !prev);
+          break;
+        }
         case "B": {
           // Cmd+Shift+B 切换 Bug 看板
           e.preventDefault();
@@ -370,6 +378,19 @@ function App() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  // 快捷按钮面板：向当前活跃终端发送命令
+  const handleQuickActionCommand = useCallback((command: string) => {
+    // 找到当前活跃 tab 对应的 sessionId
+    const currentTabId = activeTabId;
+    if (!currentTabId) return;
+    for (const [sessionId, tabId] of sessionTabMap.current.entries()) {
+      if (tabId === currentTabId) {
+        invoke("send_input", { sessionId, data: command + "\n" }).catch(() => {});
+        return;
+      }
+    }
+  }, [activeTabId]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const showingTab = activeTabId !== null && activeTab !== undefined;
@@ -589,6 +610,15 @@ function App() {
               )}
             </div>
 
+            {/* Quick Actions panel - right side */}
+            {showQuickActions && workingDir && (
+              <QuickActionsPanel
+                workingDir={workingDir}
+                onClose={() => setShowQuickActions(false)}
+                onSendCommand={handleQuickActionCommand}
+              />
+            )}
+
             {/* Bug tracker panel - right side */}
             {showBugTracker && workingDir && (
               <BugTrackerPanel workingDir={workingDir} onClose={() => setShowBugTracker(false)} />
@@ -620,6 +650,15 @@ function App() {
           }`}
         >
           Skills
+        </button>
+        <button
+          onClick={() => setShowQuickActions(!showQuickActions)}
+          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+            showQuickActions ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+          }`}
+          title="快捷操作 (⌘⇧A)"
+        >
+          Actions
         </button>
         <button
           onClick={() => setShowBugTracker(!showBugTracker)}

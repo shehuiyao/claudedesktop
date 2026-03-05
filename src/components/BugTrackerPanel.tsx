@@ -30,6 +30,7 @@ const STATUS_MAP: Record<string, string> = {
   pending: "待修复",
   fixing: "修复中",
   fixed: "已修复",
+  shelved: "暂搁置",
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -43,15 +44,17 @@ const STATUS_COLORS: Record<string, string> = {
   pending: "text-[var(--accent-red)]",
   fixing: "text-[var(--accent-orange)]",
   fixed: "text-[var(--accent-green)]",
+  shelved: "text-[var(--text-muted)]",
 };
 
 const STATUS_DOT_COLORS: Record<string, string> = {
   pending: "bg-[var(--accent-red)]",
   fixing: "bg-[var(--accent-orange)]",
   fixed: "bg-[var(--accent-green)]",
+  shelved: "bg-[var(--text-muted)]",
 };
 
-type FilterType = "all" | "pending" | "fixing" | "fixed";
+type FilterType = "all" | "pending" | "fixing" | "fixed" | "shelved";
 
 export default function BugTrackerPanel({ workingDir, onClose }: BugTrackerPanelProps) {
   const [bugsData, setBugsData] = useState<BugsData | null>(null);
@@ -121,8 +124,9 @@ export default function BugTrackerPanel({ workingDir, onClose }: BugTrackerPanel
         pending: bugsData.bugs.filter((b) => b.status === "pending").length,
         fixing: bugsData.bugs.filter((b) => b.status === "fixing").length,
         fixed: bugsData.bugs.filter((b) => b.status === "fixed").length,
+        shelved: bugsData.bugs.filter((b) => b.status === "shelved").length,
       }
-    : { total: 0, pending: 0, fixing: 0, fixed: 0 };
+    : { total: 0, pending: 0, fixing: 0, fixed: 0, shelved: 0 };
 
   const filteredBugs = bugsData
     ? filter === "all"
@@ -172,12 +176,16 @@ export default function BugTrackerPanel({ workingDir, onClose }: BugTrackerPanel
             <div className="text-base font-bold text-[var(--accent-green)]">{stats.fixed}</div>
             <div className="text-[10px] text-[var(--text-muted)]">已修复</div>
           </div>
+          <div className="flex-1 text-center">
+            <div className="text-base font-bold text-[var(--text-muted)]">{stats.shelved}</div>
+            <div className="text-[10px] text-[var(--text-muted)]">暂搁置</div>
+          </div>
         </div>
       )}
 
       {/* 筛选栏 */}
       <div className="flex gap-1 px-3 py-1.5 border-b border-[var(--border-subtle)] shrink-0">
-        {(["all", "pending", "fixing", "fixed"] as FilterType[]).map((f) => (
+        {(["all", "pending", "fixing", "fixed", "shelved"] as FilterType[]).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -432,6 +440,14 @@ function BugCard({
                 className="text-[10px] px-2 py-1 rounded bg-[var(--accent-green)]/10 text-[var(--accent-green)] hover:bg-[var(--accent-green)]/20 transition-colors duration-150 cursor-pointer"
               >
                 已修复
+              </button>
+            )}
+            {bug.status !== "shelved" && (
+              <button
+                onClick={() => onStatusChange(bug.id, "shelved")}
+                className="text-[10px] px-2 py-1 rounded bg-[var(--text-muted)]/10 text-[var(--text-muted)] hover:bg-[var(--text-muted)]/20 transition-colors duration-150 cursor-pointer"
+              >
+                暂搁置
               </button>
             )}
           </div>

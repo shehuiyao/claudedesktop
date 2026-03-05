@@ -1212,6 +1212,81 @@ fn get_bug_image(working_dir: String, image_path: String) -> Result<String, Stri
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+// ─── Quick Actions 命令 ───
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct QuickAction {
+    label: String,
+    command: String,
+    icon: String,
+    description: String,
+    color: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct QuickActionsConfig {
+    actions: Vec<QuickAction>,
+}
+
+fn default_quick_actions() -> Vec<QuickAction> {
+    vec![
+        QuickAction { label: "录入 Bug".into(), command: "/xy-bug-track".into(), icon: "\u{1f41b}".into(), description: "录入 bug 反馈".into(), color: "red".into() },
+        QuickAction { label: "修 Bug".into(), command: "/xy-bug-fix".into(), icon: "\u{1f527}".into(), description: "从 bug 列表选择并修复".into(), color: "orange".into() },
+        QuickAction { label: "发布测试服".into(), command: "发布测试服".into(), icon: "\u{1f680}".into(), description: "推送并发布到测试环境".into(), color: "cyan".into() },
+        QuickAction { label: "提交代码".into(), command: "帮我提交".into(), icon: "\u{1f4dd}".into(), description: "AI 分析变更并生成 commit".into(), color: "green".into() },
+        QuickAction { label: "创建分支".into(), command: "/branch".into(), icon: "\u{1f33f}".into(), description: "新建 Git 分支".into(), color: "purple".into() },
+        QuickAction { label: "创建 PR".into(), command: "/create-pr".into(), icon: "\u{1f4ec}".into(), description: "质量检查后创建合并请求".into(), color: "blue".into() },
+    ]
+}
+
+#[tauri::command]
+fn load_quick_actions(working_dir: String) -> Result<Vec<QuickAction>, String> {
+    let config_path = std::path::Path::new(&working_dir)
+        .join(".claude")
+        .join("quick-actions.json");
+
+    if !config_path.exists() {
+        return Ok(default_quick_actions());
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("读取配置失败: {}", e))?;
+    let config: QuickActionsConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("解析配置失败: {}", e))?;
+
+    Ok(config.actions)
+}
+
+#[tauri::command]
+fn reveal_quick_actions_config(working_dir: String) -> Result<(), String> {
+    let claude_dir = std::path::Path::new(&working_dir).join(".claude");
+    if !claude_dir.exists() {
+        std::fs::create_dir_all(&claude_dir)
+            .map_err(|e| format!("创建 .claude 目录失败: {}", e))?;
+    }
+
+    let config_path = claude_dir.join("quick-actions.json");
+
+    // 如果配置文件不存在，写入默认配置
+    if !config_path.exists() {
+        let default_config = QuickActionsConfig {
+            actions: default_quick_actions(),
+        };
+        let json = serde_json::to_string_pretty(&default_config)
+            .map_err(|e| format!("序列化失败: {}", e))?;
+        std::fs::write(&config_path, json)
+            .map_err(|e| format!("写入配置失败: {}", e))?;
+    }
+
+    // 用 Finder 打开文件
+    std::process::Command::new("open")
+        .args(["-R", &config_path.to_string_lossy()])
+        .spawn()
+        .map_err(|e| format!("打开 Finder 失败: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1258,6 +1333,8 @@ pub fn run() {
             update_bug_status,
             update_bug_priority,
             get_bug_image,
+            load_quick_actions,
+            reveal_quick_actions_config,
         ])
         .on_window_event(|window, event| {
             match event {
