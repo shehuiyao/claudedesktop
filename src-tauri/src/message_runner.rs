@@ -145,46 +145,30 @@ fn find_utf8_boundary(data: &[u8]) -> usize {
     }
 }
 
-pub fn resolve_claude_path() -> Result<PathBuf, String> {
-    if let Ok(path) = which::which("claude") {
+fn resolve_binary(name: &str, extra_candidates: &[PathBuf]) -> Result<PathBuf, String> {
+    if let Ok(path) = which::which(name) {
         return Ok(path);
     }
     let home = dirs::home_dir().unwrap_or_default();
-    let candidates = [
-        home.join(".local/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
+    let common = [
+        home.join(format!(".local/bin/{}", name)),
+        PathBuf::from(format!("/usr/local/bin/{}", name)),
+        PathBuf::from(format!("/opt/homebrew/bin/{}", name)),
     ];
-    for candidate in &candidates {
+    for candidate in extra_candidates.iter().chain(common.iter()) {
         if candidate.exists() {
             return Ok(candidate.clone());
         }
     }
-    Err("Cannot find 'claude' binary. Make sure Claude Code CLI is installed.".to_string())
-}
-
-pub fn resolve_gemini_path() -> Result<PathBuf, String> {
-    if let Ok(path) = which::which("gemini") {
-        return Ok(path);
-    }
-    let home = dirs::home_dir().unwrap_or_default();
-    let candidates = [
-        home.join(".local/bin/gemini"),
-        PathBuf::from("/usr/local/bin/gemini"),
-        PathBuf::from("/opt/homebrew/bin/gemini"),
-    ];
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-    Err("Cannot find 'gemini' binary. Make sure Gemini CLI is installed.".to_string())
+    Err(format!("Cannot find '{}' binary. Make sure it is installed.", name))
 }
 
 pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
+    let home = dirs::home_dir().unwrap_or_default();
     match tool {
-        "gemini" => resolve_gemini_path(),
-        _ => resolve_claude_path(),
+        "codex" => resolve_binary("codex", &[home.join(".npm-global/bin/codex")]),
+        "gemini" => resolve_binary("gemini", &[]),
+        _ => resolve_binary("claude", &[]),
     }
 }
 
@@ -287,7 +271,7 @@ impl PtySession {
 
         // Auto-send CLI command after a short delay to let the shell initialize
         let writer_clone = writer.clone();
-        let cli_cmd = if tool == "gemini" {
+        let cli_cmd = if tool == "gemini" || tool == "codex" {
             format!("{}\n", tool_path.display())
         } else if yolo {
             format!("{} --dangerously-skip-permissions\n", tool_path.display())

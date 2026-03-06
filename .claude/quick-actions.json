@@ -1,0 +1,88 @@
+{
+  "actions": [
+    {
+      "label": "录入 Bug",
+      "command": "/xy-bug-track",
+      "icon": "🐛",
+      "description": "录入 bug 反馈并关联修复 commit",
+      "color": "red"
+    },
+    {
+      "label": "修 Bug",
+      "command": "/xy-bug-fix",
+      "icon": "🔧",
+      "description": "从 bug 列表选择并修复",
+      "color": "orange"
+    },
+    {
+      "label": "提交代码",
+      "command": "帮我提交",
+      "icon": "📝",
+      "description": "AI 分析变更并生成 commit",
+      "color": "green"
+    },
+    {
+      "label": "创建分支",
+      "command": "/branch",
+      "icon": "🌿",
+      "description": "新建 Git 分支",
+      "color": "purple"
+    },
+    {
+      "label": "创建 PR",
+      "command": "/create-pr",
+      "icon": "📬",
+      "description": "质量检查后创建合并请求",
+      "color": "blue"
+    },
+    {
+      "label": "发版",
+      "command": "/xy-release",
+      "icon": "🚀",
+      "description": "版本升级、构建、打标签、发布",
+      "color": "cyan"
+    },
+    {
+      "label": "合并 develop",
+      "command": "/merge-to-develop",
+      "icon": "🔀",
+      "description": "将当前分支合并到 develop 并推送",
+      "color": "purple"
+    },
+    {
+      "label": "合并 master",
+      "command": "/merge-master-safely",
+      "icon": "⬇️",
+      "description": "安全合并 origin/master 到当前分支",
+      "color": "blue"
+    },
+    {
+      "label": "代码审查",
+      "command": "/simplify",
+      "icon": "🔍",
+      "description": "审查代码质量、复用性和效率",
+      "color": "cyan"
+    },
+    {
+      "label": "保存会话",
+      "command": "/save-session",
+      "icon": "💾",
+      "description": "归档当前会话关键信息",
+      "color": "green"
+    },
+    {
+      "label": "变更记录",
+      "command": "/save-changelog",
+      "icon": "📋",
+      "description": "归档当前分支改动文档",
+      "color": "orange"
+    },
+    {
+      "label": "产品播报",
+      "command": "/product-broadcast",
+      "icon": "📢",
+      "description": "生成产品发布播报文档",
+      "color": "red"
+    }
+  ]
+}

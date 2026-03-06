@@ -290,7 +290,7 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
 
 #[tauri::command]
 fn check_claude_installed() -> Result<bool, String> {
-    Ok(message_runner::resolve_claude_path().is_ok())
+    Ok(message_runner::resolve_tool_path("claude").is_ok())
 }
 
 #[derive(serde::Serialize)]
@@ -1013,12 +1013,24 @@ fn get_usage_stats() -> Result<UsageStats, String> {
 }
 
 #[tauri::command]
+fn open_terminal(path: String) -> Result<(), String> {
+    use std::process::Command;
+    let mut child = Command::new("open")
+        .args(["-a", "Terminal", &path])
+        .spawn()
+        .map_err(|e| format!("Failed to open Terminal: {}", e))?;
+    std::thread::spawn(move || { let _ = child.wait(); });
+    Ok(())
+}
+
+#[tauri::command]
 fn reveal_in_finder(path: String) -> Result<(), String> {
     use std::process::Command;
-    Command::new("open")
+    let mut child = Command::new("open")
         .args(["-R", &path])
         .spawn()
         .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    std::thread::spawn(move || { let _ = child.wait(); });
     Ok(())
 }
 
@@ -1323,6 +1335,7 @@ pub fn run() {
             switch_branch,
             get_commit_history,
             reveal_in_finder,
+            open_terminal,
             confirm_close,
             submit_feedback,
             get_feedbacks,

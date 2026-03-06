@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface QuickAction {
@@ -27,8 +27,11 @@ const COLOR_MAP: Record<string, string> = {
 export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }: QuickActionsPanelProps) {
   const [actions, setActions] = useState<QuickAction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadActions = useCallback(() => {
+    setLoading(true);
     invoke<QuickAction[]>("load_quick_actions", { workingDir })
       .then((data) => {
         setActions(data);
@@ -43,13 +46,32 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
     loadActions();
   }, [loadActions]);
 
+  // 清理轮询定时器
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
   const handleEdit = useCallback(() => {
     invoke("reveal_quick_actions_config", { workingDir }).catch(() => {});
   }, [workingDir]);
 
   const handleAiRecommend = useCallback(() => {
     onSendCommand("请根据当前项目的技能列表，帮我推荐适合的快捷按钮配置，生成 .claude/quick-actions.json 文件");
-  }, [onSendCommand]);
+    // 发送命令后轮询刷新，等 AI 生成完配置文件
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    let count = 0;
+    pollTimerRef.current = setInterval(() => {
+      count++;
+      loadActions();
+      if (count >= 12) {
+        // 最多轮询 60 秒
+        if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    }, 5000);
+  }, [onSendCommand, loadActions]);
 
   return (
     <div className="w-56 border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] flex flex-col h-full overflow-hidden">
@@ -82,18 +104,27 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
             {actions.map((action, idx) => {
               const accentColor = COLOR_MAP[action.color] || "var(--text-secondary)";
               return (
-                <button
-                  key={idx}
-                  onClick={() => onSendCommand(action.command)}
-                  className="flex flex-col items-center gap-1 py-2.5 px-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] hover:border-current cursor-pointer transition-all duration-150 group"
-                  style={{ color: accentColor }}
-                  title={action.description}
-                >
-                  <span className="text-lg leading-none">{action.icon}</span>
-                  <span className="text-[10px] font-medium text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] truncate w-full text-center">
-                    {action.label}
-                  </span>
-                </button>
+                <div key={idx} className="relative">
+                  <button
+                    onClick={() => onSendCommand(action.command)}
+                    onMouseEnter={() => setHoveredIdx(idx)}
+                    onMouseLeave={() => setHoveredIdx(null)}
+                    className="w-full flex flex-col items-center gap-1 py-2.5 px-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] hover:border-current cursor-pointer transition-all duration-150 group"
+                    style={{ color: accentColor }}
+                  >
+                    <span className="text-lg leading-none">{action.icon}</span>
+                    <span className="text-[10px] font-medium text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] truncate w-full text-center">
+                      {action.label}
+                    </span>
+                  </button>
+                  {hoveredIdx === idx && (
+                    <div className="absolute z-50 right-full top-0 mr-2 w-48 p-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] shadow-lg shadow-black/20 pointer-events-none">
+                      <div className="text-[11px] font-medium text-[var(--text-primary)] mb-1">{action.label}</div>
+                      <div className="text-[10px] text-[var(--text-secondary)] mb-1.5">{action.description}</div>
+                      <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">{action.command}</div>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -108,6 +139,14 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
           title="在 Finder 中打开配置文件"
         >
           编辑配置
+        </button>
+        <div className="w-px bg-[var(--border-subtle)]" />
+        <button
+          onClick={loadActions}
+          className="flex-1 text-[10px] py-1.5 text-[var(--text-muted)] hover:text-[var(--accent-green)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150"
+          title="重新加载配置"
+        >
+          刷新
         </button>
         <div className="w-px bg-[var(--border-subtle)]" />
         <button

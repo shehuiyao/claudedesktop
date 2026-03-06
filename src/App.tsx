@@ -428,6 +428,19 @@ function App() {
                   ? `session: ${activeSessionId.slice(0, 8)}...`
                   : "Claude Code Desktop"}
             </span>
+            {workingDir && (
+              <button
+                onClick={() => invoke("open_terminal", { path: workingDir }).catch(() => {})}
+                className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 shrink-0"
+                title="在终端中打开"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="2" width="14" height="12" rx="2" />
+                  <polyline points="4,7 7,9.5 4,12" />
+                  <line x1="9" y1="12" x2="12" y2="12" />
+                </svg>
+              </button>
+            )}
             <div className="ml-auto flex items-center gap-2 shrink-0">
               <BranchSwitcher
                 gitInfo={gitInfo}
@@ -499,6 +512,15 @@ function App() {
                           <div className="text-sm font-medium text-[#4285F4] mb-1">Gemini</div>
                           <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
                             Google Gemini CLI
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleStartTerminal(tab.id, false, "codex")}
+                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                        >
+                          <div className="text-sm font-medium text-[#10a37f] mb-1">Codex</div>
+                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                            OpenAI Codex CLI
                           </div>
                         </button>
                       </div>

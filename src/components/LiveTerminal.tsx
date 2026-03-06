@@ -6,8 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
-
-type CliTool = "claude" | "gemini";
+import type { CliTool } from "./TabBar";
 
 interface LiveTerminalProps {
   workingDir: string;
@@ -145,6 +144,12 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
         cursorBlink: true,
         scrollback: 5000,
         allowProposedApi: true,
+      });
+
+      // IME 组合期间不让 xterm 拦截按键，保证中文标点（如：、；等）能正常输入
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.isComposing || e.keyCode === 229) return false;
+        return true;
       });
 
       fitAddon = new FitAddon();
@@ -328,7 +333,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
       )}
       {starting && (
         <div className="px-3 py-1 text-xs text-[var(--text-secondary)] bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
-          Starting {tool === "gemini" ? "Gemini" : "Claude"} session...
+          Starting {{ claude: "Claude", gemini: "Gemini", codex: "Codex" }[tool ?? "claude"]} session...
         </div>
       )}
       <div className="flex-1 min-h-0 p-2">

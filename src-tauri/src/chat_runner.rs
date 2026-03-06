@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
-use crate::message_runner::resolve_claude_path;
+use crate::message_runner::resolve_tool_path;
 
 /// Capture the full environment from an interactive login shell.
 fn get_login_shell_env() -> Result<HashMap<String, String>, String> {
@@ -87,7 +87,7 @@ pub fn send_chat_message(
     working_dir: String,
     resume_session_id: Option<String>,
 ) -> Result<ChatProcess, String> {
-    let claude_path = resolve_claude_path()?;
+    let claude_path = resolve_tool_path("claude")?;
     let login_env = cached_login_env()?;
 
     // Use a real PTY so Node.js flushes each JSON line immediately
@@ -258,7 +258,7 @@ fn strip_ansi(s: &str) -> String {
 /// Synchronous test (diagnostic)
 pub fn test_chat(working_dir: &str) -> Result<String, String> {
     use std::io::Read;
-    let claude_path = resolve_claude_path()?;
+    let claude_path = resolve_tool_path("claude")?;
     let login_env = cached_login_env()?;
 
     let pty_system = native_pty_system();
