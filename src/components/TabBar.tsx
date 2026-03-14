@@ -9,6 +9,7 @@ export interface Tab {
   mode: "chat" | "terminal";
   yolo?: boolean;
   tool?: CliTool;
+  resumeSessionId?: string;
   status?: "idle" | "running" | "waiting" | "error" | "done";
 }
 

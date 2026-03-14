@@ -6,6 +6,7 @@ interface SidebarProps {
   onSelectSession: (projectSlug: string, sessionId: string) => void;
   onNewSession: () => void;
   onOpenProject: (projectPath: string) => void;
+  onResumeSession: (projectPath: string, sessionId: string) => void;
 }
 
 function sessionLabel(entry: HistoryEntry): string {
@@ -28,7 +29,7 @@ function savePinned(pinned: Set<string>) {
   localStorage.setItem(PINNED_KEY, JSON.stringify([...pinned]));
 }
 
-export default function Sidebar({ activeSessionId, onSelectSession, onNewSession, onOpenProject }: SidebarProps) {
+export default function Sidebar({ activeSessionId, onSelectSession, onNewSession, onOpenProject, onResumeSession }: SidebarProps) {
   const { history, loading, error, refetch } = useHistory();
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
@@ -247,24 +248,42 @@ export default function Sidebar({ activeSessionId, onSelectSession, onNewSession
               {!isCollapsed && group.entries.map((entry) => {
                 const isActive = entry.sessionId === activeSessionId;
                 return (
-                  <button
+                  <div
                     key={entry.sessionId ?? entry.timestamp}
-                    onClick={() => {
-                      if (entry.project && entry.sessionId) {
-                        onSelectSession(entry.project, entry.sessionId);
-                      }
-                    }}
-                    disabled={!entry.project || !entry.sessionId}
-                    className={`w-full text-left px-2 py-1.5 text-xs rounded-md cursor-pointer truncate block transition-all duration-150 ml-2 ${
-                      isActive
-                        ? "bg-[var(--accent-cyan)]/15 text-[var(--accent-cyan)] border-l-2 border-[var(--accent-cyan)]"
-                        : "text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
-                    } disabled:opacity-40 disabled:cursor-default`}
+                    className="flex items-center ml-2 group/entry"
                     style={{ width: "calc(100% - 8px)" }}
-                    title={entry.display ?? undefined}
                   >
-                    {sessionLabel(entry)}
-                  </button>
+                    <button
+                      onClick={() => {
+                        if (entry.project && entry.sessionId) {
+                          onSelectSession(entry.project, entry.sessionId);
+                        }
+                      }}
+                      disabled={!entry.project || !entry.sessionId}
+                      className={`flex-1 text-left px-2 py-1.5 text-xs rounded-md cursor-pointer truncate block transition-all duration-150 min-w-0 ${
+                        isActive
+                          ? "bg-[var(--accent-cyan)]/15 text-[var(--accent-cyan)] border-l-2 border-[var(--accent-cyan)]"
+                          : "text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                      } disabled:opacity-40 disabled:cursor-default`}
+                      title={entry.display ?? undefined}
+                    >
+                      {sessionLabel(entry)}
+                    </button>
+                    {entry.project && entry.sessionId && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onResumeSession(entry.project!, entry.sessionId!);
+                        }}
+                        className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--accent-green)] cursor-pointer opacity-0 group-hover/entry:opacity-100 transition-all duration-150 shrink-0"
+                        title="继续对话"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M4 2l10 6-10 6V2z"/>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>

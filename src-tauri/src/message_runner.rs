@@ -215,6 +215,7 @@ impl PtySession {
         session_id: String,
         yolo: bool,
         tool: String,
+        resume_session_id: Option<String>,
     ) -> Result<Self, String> {
         let tool_path = resolve_tool_path(&tool)?;
         let pty_system = native_pty_system();
@@ -271,12 +272,22 @@ impl PtySession {
 
         // Auto-send CLI command after a short delay to let the shell initialize
         let writer_clone = writer.clone();
-        let cli_cmd = if tool == "gemini" || tool == "codex" {
-            format!("{}\n", tool_path.display())
-        } else if yolo {
-            format!("{} --dangerously-skip-permissions\n", tool_path.display())
-        } else {
-            format!("{}\n", tool_path.display())
+        let cli_cmd = {
+            let mut args = Vec::new();
+            if tool != "gemini" && tool != "codex" {
+                if yolo {
+                    args.push("--dangerously-skip-permissions".to_string());
+                }
+                if let Some(ref sid) = resume_session_id {
+                    args.push("--resume".to_string());
+                    args.push(sid.clone());
+                }
+            }
+            if args.is_empty() {
+                format!("{}\n", tool_path.display())
+            } else {
+                format!("{} {}\n", tool_path.display(), args.join(" "))
+            }
         };
         thread::spawn(move || {
             thread::sleep(std::time::Duration::from_millis(500));

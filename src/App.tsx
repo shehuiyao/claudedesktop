@@ -271,6 +271,21 @@ function App() {
     setActiveProject(null);
   }, []);
 
+  // 从历史记录恢复对话：创建新终端 tab 并带上 --resume 参数
+  const handleResumeSession = useCallback((projectPath: string, sessionId: string) => {
+    const tabId = `tab-${Date.now()}`;
+    const dirName = projectPath.split("/").pop() || projectPath;
+    setTabs((prev) => [
+      ...prev,
+      { id: tabId, label: `${dirName} (resumed)`, workingDir: projectPath, mode: "terminal", yolo: false, resumeSessionId: sessionId, status: "running" },
+    ]);
+    setTerminalActivated((prev) => new Set(prev).add(tabId));
+    setActiveTabId(tabId);
+    setWorkingDir(projectPath);
+    setActiveSessionId(null);
+    setActiveProject(null);
+  }, []);
+
   const handleNewSession = useCallback(async () => {
     await handleNewTab();
   }, [handleNewTab]);
@@ -291,10 +306,14 @@ function App() {
       setGitInfo(null);
       return;
     }
+    let pending = false;
     const fetchGit = () => {
+      if (pending) return; // 防止上一次还没返回时重复发起
+      pending = true;
       invoke<GitInfo>("get_git_info", { path: workingDir })
         .then(setGitInfo)
-        .catch(() => setGitInfo(null));
+        .catch(() => setGitInfo(null))
+        .finally(() => { pending = false; });
     };
     fetchGit();
     const interval = setInterval(fetchGit, 5000);
@@ -407,6 +426,7 @@ function App() {
             onSelectSession={handleSelectHistorySession}
             onNewSession={handleNewSession}
             onOpenProject={handleOpenProject}
+            onResumeSession={handleResumeSession}
           />
         )}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -563,6 +583,7 @@ function App() {
                           workingDir={tab.workingDir}
                           yolo={tab.yolo}
                           tool={tab.tool}
+                          resumeSessionId={tab.resumeSessionId}
                           isActive={isActive}
                           onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
                           onError={() => updateTabStatus(tab.id, "error")}

@@ -12,6 +12,7 @@ interface LiveTerminalProps {
   workingDir: string;
   yolo?: boolean;
   tool?: CliTool;
+  resumeSessionId?: string;
   isActive?: boolean;
   onSessionStarted?: (id: string) => void;
   onError?: (error: string) => void;
@@ -66,7 +67,7 @@ function getTerminalTheme(isDark: boolean) {
   };
 }
 
-export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, onSessionStarted, onError }: LiveTerminalProps) {
+export default function LiveTerminal({ workingDir, yolo, tool, resumeSessionId, isActive = true, onSessionStarted, onError }: LiveTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -181,21 +182,54 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
       let hasReceivedOutput = false;
 
       // Register listeners BEFORE starting session
+      // 缓冲 pty 输出，用 requestAnimationFrame 合并写入，防止高频输出导致 UI 卡死
+      let outputBuffer = "";
+      let outputFlushId: number | null = null;
+      let skillCheckBuffer = "";
+      let skillCheckTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const flushOutputBuffer = () => {
+        if (outputBuffer && term) {
+          term.write(outputBuffer);
+          outputBuffer = "";
+        }
+        outputFlushId = null;
+      };
+
+      const checkSkills = () => {
+        if (skillCheckBuffer) {
+          const clean = skillCheckBuffer.replace(/\x1b\[[\d;]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "");
+          const matches = clean.matchAll(/Skill\(([^)]+)\)/g);
+          for (const m of matches) {
+            if (/^[\w\-:.]+$/.test(m[1]) && !recordedSkillsRef.current.has(m[1])) {
+              recordedSkillsRef.current.add(m[1]);
+              invoke("record_skill_usage", { skillName: m[1] }).catch(() => {});
+            }
+          }
+          skillCheckBuffer = "";
+        }
+        skillCheckTimer = null;
+      };
+
       const outputUn = await listen<{ id: string; data: string }>("pty-output", (event) => {
         if (event.payload.id === sessionId) {
           hasReceivedOutput = true;
-          term!.write(event.payload.data);
-          // 检测技能调用，记录使用次数（格式: Skill(skill-name)）
-          // 每个 session 每个技能只计一次，避免终端重绘导致重复计数
-          const clean = event.payload.data.replace(/\x1b\[[\d;]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "");
-          const m = clean.match(/Skill\(([^)]+)\)/);
-          if (m && /^[\w\-:.]+$/.test(m[1]) && !recordedSkillsRef.current.has(m[1])) {
-            recordedSkillsRef.current.add(m[1]);
-            invoke("record_skill_usage", { skillName: m[1] }).catch(() => {});
+          outputBuffer += event.payload.data;
+          if (outputFlushId === null) {
+            outputFlushId = requestAnimationFrame(flushOutputBuffer);
+          }
+          // 延迟批量检测技能调用，避免每条输出都跑正则
+          skillCheckBuffer += event.payload.data;
+          if (!skillCheckTimer) {
+            skillCheckTimer = setTimeout(checkSkills, 500);
           }
         }
       });
       unlisteners.push(outputUn);
+      unlisteners.push(() => {
+        if (outputFlushId !== null) cancelAnimationFrame(outputFlushId);
+        if (skillCheckTimer) clearTimeout(skillCheckTimer);
+      });
 
       const exitUn = await listen<{ id: string }>("pty-exit", (event) => {
         if (event.payload.id === sessionId) {
@@ -215,7 +249,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
 
       // Start PTY session
       try {
-        const id = await invoke<string>("start_session", { workingDir, yolo: yolo ?? false, tool: tool ?? "claude" });
+        const id = await invoke<string>("start_session", { workingDir, yolo: yolo ?? false, tool: tool ?? "claude", resumeSessionId: resumeSessionId ?? null });
         sessionId = id;
         sessionIdRef.current = id;
         setStarting(false);
@@ -279,7 +313,13 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
             wasHidden = true;
             return;
           }
+          // 记住滚动位置，fit() 后恢复，防止跳到顶部
+          const buf = term!.buffer.active;
+          const wasAtBottom = buf.viewportY >= buf.baseY;
           fitAddon!.fit();
+          if (wasAtBottom) {
+            term!.scrollToBottom();
+          }
           if (sessionIdRef.current) {
             const cols = term!.cols;
             const rows = term!.rows;
@@ -309,7 +349,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, isActive = true, 
       term?.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onSessionStarted is tracked via ref
-  }, [workingDir, yolo, tool]);
+  }, [workingDir, yolo, tool, resumeSessionId]);
 
   if (error) {
     return (
