@@ -163,11 +163,37 @@ fn resolve_binary(name: &str, extra_candidates: &[PathBuf]) -> Result<PathBuf, S
     Err(format!("Cannot find '{}' binary. Make sure it is installed.", name))
 }
 
+/// 查找 nvm 管理的 node 版本中的某个二进制文件
+fn find_in_nvm(name: &str) -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let nvm_dir = home.join(".nvm/versions/node");
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
+        let mut versions: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect();
+        // 按名称倒序，优先用最新版本
+        versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        for entry in versions {
+            candidates.push(entry.path().join("bin").join(name));
+        }
+    }
+    candidates
+}
+
 pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
     let home = dirs::home_dir().unwrap_or_default();
     match tool {
-        "codex" => resolve_binary("codex", &[home.join(".npm-global/bin/codex")]),
-        "gemini" => resolve_binary("gemini", &[]),
+        "codex" => {
+            let mut extras = vec![home.join(".npm-global/bin/codex")];
+            extras.extend(find_in_nvm("codex"));
+            resolve_binary("codex", &extras)
+        }
+        "gemini" => {
+            let extras = find_in_nvm("gemini");
+            resolve_binary("gemini", &extras)
+        }
         _ => resolve_binary("claude", &[]),
     }
 }
