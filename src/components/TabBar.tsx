@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-export type CliTool = "claude" | "gemini" | "codex";
+export type CliTool = "claude" | "gemini" | "codex" | "volc";
 
 export interface Tab {
   id: string;
@@ -10,6 +10,8 @@ export interface Tab {
   yolo?: boolean;
   tool?: CliTool;
   resumeSessionId?: string;
+  isWorktree?: boolean;
+  worktreeParentDir?: string;
   status?: "idle" | "running" | "waiting" | "error" | "done";
 }
 
@@ -176,6 +178,9 @@ export default function TabBar({
             <span className={`truncate max-w-[120px] ${isWaiting ? "text-[var(--accent-orange,#f59e0b)] font-medium" : ""}`}>
               {tab.label}
             </span>
+            {tab.isWorktree && (
+              <span className="text-[8px] px-1 py-px rounded bg-[var(--accent-purple,#bc8cff)]/20 text-[var(--accent-purple,#bc8cff)] font-semibold tracking-wide">WT</span>
+            )}
             <button
               className={`ml-1 w-4 h-4 flex items-center justify-center rounded-sm text-[10px] leading-none cursor-pointer transition-all duration-150 ${
                 isActive

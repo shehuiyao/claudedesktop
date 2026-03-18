@@ -22,7 +22,7 @@ function parseSessionMessages(raw: SessionMessage[]): ChatMessage[] {
       text = msg.content;
     } else if (Array.isArray(msg.content)) {
       text = (msg.content as { type?: string; text?: string }[])
-        .filter((b) => b.type === "text" && b.text)
+        .filter((b) => (b.type === "text" || b.type === "input_text" || b.type === "output_text") && b.text)
         .map((b) => b.text!)
         .join("\n");
     }

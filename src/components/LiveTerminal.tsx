@@ -251,8 +251,11 @@ export default function LiveTerminal({ workingDir, yolo, tool, resumeSessionId, 
           if (outputFlushId === null) {
             outputFlushId = requestAnimationFrame(flushOutputBuffer);
           }
-          // 延迟批量检测技能调用，避免每条输出都跑正则
+          // 延迟批量检测技能调用，避免每条输出都跑正则，限制缓冲区大小防止大量输出时正则卡顿
           skillCheckBuffer += event.payload.data;
+          if (skillCheckBuffer.length > 10240) {
+            skillCheckBuffer = skillCheckBuffer.slice(-10240);
+          }
           if (!skillCheckTimer) {
             skillCheckTimer = setTimeout(checkSkills, 500);
           }
@@ -378,11 +381,13 @@ export default function LiveTerminal({ workingDir, yolo, tool, resumeSessionId, 
             if (terminalSizeChanged) {
               if (ptyResizeTimer) clearTimeout(ptyResizeTimer);
               ptyResizeTimer = setTimeout(() => {
-                if (!sessionIdRef.current) return;
-                if (rows === lastSentRows && cols === lastSentCols) return;
-                invoke("resize_session", { sessionId: sessionIdRef.current, rows, cols }).catch(() => {});
-                lastSentRows = rows;
-                lastSentCols = cols;
+                if (!sessionIdRef.current || !term) return;
+                const curRows = term.rows;
+                const curCols = term.cols;
+                if (curRows === lastSentRows && curCols === lastSentCols) return;
+                invoke("resize_session", { sessionId: sessionIdRef.current, rows: curRows, cols: curCols }).catch(() => {});
+                lastSentRows = curRows;
+                lastSentCols = curCols;
                 ptyResizeTimer = null;
               }, 120);
             }
@@ -439,7 +444,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, resumeSessionId, 
       )}
       {starting && (
         <div className="px-3 py-1 text-xs text-[var(--text-secondary)] bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
-          Starting {{ claude: "Claude", gemini: "Gemini", codex: "Codex" }[tool ?? "claude"]} session...
+          Starting {{ claude: "Claude", gemini: "Gemini", codex: "Codex", volc: "火山 CodingPlan" }[tool ?? "claude"]} session...
         </div>
       )}
       <div className="flex-1 min-h-0 p-2">

@@ -29,6 +29,7 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
   const [loading, setLoading] = useState(true);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [tooltipTop, setTooltipTop] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadActions = useCallback(() => {
@@ -91,7 +92,7 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
       </div>
 
       {/* 按钮网格 */}
-      <div className="flex-1 overflow-y-auto p-2 relative">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 relative">
         {loading ? (
           <div className="text-center py-8 text-[var(--text-muted)] text-xs">
             加载中...
@@ -113,7 +114,7 @@ export default function QuickActionsPanel({ workingDir, onClose, onSendCommand }
                     onMouseEnter={(e) => {
                       setHoveredIdx(idx);
                       const rect = e.currentTarget.getBoundingClientRect();
-                      const container = e.currentTarget.closest('.overflow-y-auto');
+                      const container = scrollRef.current;
                       if (container) {
                         const cRect = container.getBoundingClientRect();
                         setTooltipTop(rect.bottom - cRect.top + container.scrollTop);

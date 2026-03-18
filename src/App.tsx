@@ -286,6 +286,26 @@ function App() {
     setActiveProject(null);
   }, []);
 
+  // 创建 git worktree 并打开为新 tab
+  const handleCreateWorktree = useCallback(async (branch: string) => {
+    if (!workingDir) return;
+    try {
+      const result = await invoke<{ path: string; branch: string }>("create_worktree", { path: workingDir, branch });
+      const tabId = `tab-${Date.now()}`;
+      const dirName = result.path.split("/").pop() || branch;
+      setTabs((prev) => [
+        ...prev,
+        { id: tabId, label: dirName, workingDir: result.path, mode: "terminal", isWorktree: true, worktreeParentDir: workingDir, status: "idle" },
+      ]);
+      setActiveTabId(tabId);
+      setWorkingDir(result.path);
+      setActiveSessionId(null);
+      setActiveProject(null);
+    } catch (e) {
+      console.error("Failed to create worktree:", e);
+    }
+  }, [workingDir]);
+
   const handleNewSession = useCallback(async () => {
     await handleNewTab();
   }, [handleNewTab]);
@@ -466,6 +486,7 @@ function App() {
                 gitInfo={gitInfo}
                 workingDir={workingDir}
                 onBranchSwitched={refreshGitInfo}
+                onCreateWorktree={handleCreateWorktree}
               />
             </div>
           </div>
@@ -541,6 +562,15 @@ function App() {
                           <div className="text-sm font-medium text-[#10a37f] mb-1">Codex</div>
                           <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
                             OpenAI Codex CLI
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleStartTerminal(tab.id, false, "volc")}
+                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#FF6B35] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                        >
+                          <div className="text-sm font-medium text-[#FF6B35] mb-1">🌋 火山</div>
+                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                            火山 CodingPlan
                           </div>
                         </button>
                       </div>

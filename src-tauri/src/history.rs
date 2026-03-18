@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -26,6 +26,8 @@ pub struct HistoryEntry {
     pub project: Option<String>,
     #[serde(rename = "sessionId")]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 /// The actual message payload nested inside a session JSONL line.
@@ -57,6 +59,10 @@ fn claude_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude"))
 }
 
+fn codex_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex"))
+}
+
 /// Convert a project path like `/Users/foo/bar` to its slug `-Users-foo-bar`.
 /// Claude Code replaces all non-alphanumeric characters (except `-`) with `-`.
 fn project_path_to_slug(project_path: &str) -> String {
@@ -66,7 +72,9 @@ fn project_path_to_slug(project_path: &str) -> String {
         .collect()
 }
 
-pub fn read_history() -> Result<Vec<HistoryEntry>, String> {
+// ─── Claude history ──────────────────────────────────────────────────────────
+
+fn read_claude_history() -> Result<Vec<HistoryEntry>, String> {
     let path = claude_dir()
         .ok_or("Cannot find home directory")?
         .join("history.jsonl");
@@ -80,7 +88,6 @@ pub fn read_history() -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
     let mut seen_sessions = HashSet::new();
 
-    // Read all entries first
     let mut all_entries = Vec::new();
     for line in reader.lines() {
         let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
@@ -89,12 +96,15 @@ pub fn read_history() -> Result<Vec<HistoryEntry>, String> {
             continue;
         }
         match serde_json::from_str::<HistoryEntry>(trimmed) {
-            Ok(entry) => all_entries.push(entry),
+            Ok(mut entry) => {
+                entry.tool = Some("claude".to_string());
+                all_entries.push(entry);
+            }
             Err(_) => continue,
         }
     }
 
-    // Deduplicate: iterate in reverse (latest entries first) and keep only the first occurrence of each sessionId
+    // Deduplicate: iterate in reverse (latest entries first)
     for entry in all_entries.into_iter().rev() {
         if let Some(ref sid) = entry.session_id {
             if seen_sessions.contains(sid) {
@@ -105,28 +115,20 @@ pub fn read_history() -> Result<Vec<HistoryEntry>, String> {
         entries.push(entry);
     }
 
-    // Reverse back so the order is preserved (oldest first; the frontend sorts by timestamp anyway)
     entries.reverse();
-
     Ok(entries)
 }
 
-pub fn read_session(project_slug: &str, session_id: &str) -> Result<Vec<SessionMessage>, String> {
-    // The project_slug from the frontend may be a full path like "/Users/foo/bar"
-    // or already a slug like "-Users-foo-bar". Try slug conversion first, then fall back.
+fn read_claude_session(project_slug: &str, session_id: &str) -> Result<Vec<SessionMessage>, String> {
     let base = claude_dir()
         .ok_or("Cannot find home directory")?
         .join("projects");
 
     let session_file = format!("{}.jsonl", session_id);
 
-    // Try the slug derived from the project path
     let slug = project_path_to_slug(project_slug);
     let mut path = base.join(&slug).join(&session_file);
 
-    // If that doesn't exist, try using the value as-is (it may already be a slug).
-    // Only do this when project_slug is not an absolute path, because PathBuf::join
-    // with an absolute path discards the base entirely.
     if !path.exists() && !project_slug.starts_with('/') {
         path = base.join(project_slug).join(&session_file);
     }
@@ -152,7 +154,6 @@ pub fn read_session(project_slug: &str, session_id: &str) -> Result<Vec<SessionM
 
         let line_type = raw.line_type.as_deref().unwrap_or("");
 
-        // Only include user and assistant messages
         if line_type != "user" && line_type != "assistant" {
             continue;
         }
@@ -166,6 +167,221 @@ pub fn read_session(project_slug: &str, session_id: &str) -> Result<Vec<SessionM
         }
     }
     Ok(messages)
+}
+
+// ─── Codex history ───────────────────────────────────────────────────────────
+
+/// Walk a directory recursively and collect all `.jsonl` file paths.
+fn walk_jsonl_files(dir: &PathBuf) -> Vec<PathBuf> {
+    let mut results = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return results;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            results.extend(walk_jsonl_files(&path));
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            results.push(path);
+        }
+    }
+    results
+}
+
+/// Extract the Codex session UUID from a filename like
+/// `rollout-2026-03-01T20-00-26-019ca945-719b-73a2-b408-a8f560398a74`.
+/// The UUID is the last 5 hyphen-separated segments.
+fn extract_session_id_from_filename(stem: &str) -> Option<String> {
+    let parts: Vec<&str> = stem.split('-').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    let uuid_parts = &parts[parts.len() - 5..];
+    let candidate = uuid_parts.join("-");
+    // Basic sanity: should be 36 chars (8-4-4-4-12)
+    if candidate.len() == 36 {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// Read the cwd from the first `session_meta` line in a Codex session file.
+fn read_codex_session_cwd(path: &PathBuf) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let line = line.ok()?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+        if val["type"].as_str() == Some("session_meta") {
+            return val["payload"]["cwd"].as_str().map(|s| s.to_string());
+        }
+        // session_meta is always the first line; stop after a few lines
+        break;
+    }
+    None
+}
+
+/// Build a map from Codex session_id → (cwd, file_path) by scanning ~/.codex/sessions/.
+fn build_codex_session_map() -> HashMap<String, (String, PathBuf)> {
+    let sessions_dir = match codex_dir() {
+        Some(d) => d.join("sessions"),
+        None => return HashMap::new(),
+    };
+
+    let mut map = HashMap::new();
+    for path in walk_jsonl_files(&sessions_dir) {
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if let Some(session_id) = extract_session_id_from_filename(&stem) {
+            if let Some(cwd) = read_codex_session_cwd(&path) {
+                map.insert(session_id, (cwd, path));
+            }
+        }
+    }
+    map
+}
+
+fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
+    let codex = codex_dir().ok_or("Cannot find home directory")?;
+    let index_path = codex.join("session_index.jsonl");
+
+    if !index_path.exists() {
+        return Ok(vec![]);
+    }
+
+    // Build session map to get cwd for each session
+    let session_map = build_codex_session_map();
+
+    let file = fs::File::open(&index_path)
+        .map_err(|e| format!("Failed to open codex session_index: {}", e))?;
+    let reader = BufReader::new(file);
+
+    let mut all_entries: Vec<serde_json::Value> = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            all_entries.push(val);
+        }
+    }
+
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Deduplicate by session id (latest wins)
+    for entry in all_entries.into_iter().rev() {
+        let id = match entry["id"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.insert(id.clone());
+
+        let thread_name = entry["thread_name"].as_str().map(|s| s.to_string());
+        let updated_at = entry["updated_at"].as_str().map(|s| s.to_string());
+        let cwd = session_map.get(&id).map(|(cwd, _)| cwd.clone());
+
+        entries.push(HistoryEntry {
+            display: thread_name,
+            timestamp: updated_at,
+            project: cwd,
+            session_id: Some(id),
+            tool: Some("codex".to_string()),
+        });
+    }
+
+    entries.reverse();
+    Ok(entries)
+}
+
+/// Find a Codex session file by scanning ~/.codex/sessions/ for a file ending with `{session_id}.jsonl`.
+fn find_codex_session_file(session_id: &str) -> Option<PathBuf> {
+    let sessions_dir = codex_dir()?.join("sessions");
+    let suffix = format!("{}.jsonl", session_id);
+    for path in walk_jsonl_files(&sessions_dir) {
+        if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+            if fname.ends_with(&suffix) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn read_codex_session(session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    let session_file = find_codex_session_file(session_id)
+        .ok_or_else(|| format!("Codex session file not found for: {}", session_id))?;
+
+    let file = fs::File::open(&session_file)
+        .map_err(|e| format!("Failed to open codex session: {}", e))?;
+    let reader = BufReader::new(file);
+    let mut messages = Vec::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let raw: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if raw["type"].as_str() != Some("response_item") {
+            continue;
+        }
+
+        let payload = &raw["payload"];
+        if payload["type"].as_str() != Some("message") {
+            continue;
+        }
+
+        let role = match payload["role"].as_str() {
+            Some(r) if r == "user" || r == "assistant" => r.to_string(),
+            _ => continue, // skip developer/system messages
+        };
+
+        let content = payload["content"].clone();
+        messages.push(SessionMessage {
+            role: Some(role),
+            content: Some(content),
+            msg_type: Some("response_item".to_string()),
+        });
+    }
+
+    Ok(messages)
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────────
+
+pub fn read_history() -> Result<Vec<HistoryEntry>, String> {
+    let mut entries = read_claude_history()?;
+    let codex_entries = read_codex_history().unwrap_or_default();
+    entries.extend(codex_entries);
+    Ok(entries)
+}
+
+pub fn read_session(project_slug: &str, session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    // Try Claude session format first
+    match read_claude_session(project_slug, session_id) {
+        Ok(msgs) => return Ok(msgs),
+        Err(_) => {}
+    }
+    // Fall back to Codex session format
+    read_codex_session(session_id)
 }
 
 pub fn list_projects() -> Result<Vec<String>, String> {

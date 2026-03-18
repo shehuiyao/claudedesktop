@@ -22,12 +22,14 @@ interface BranchSwitcherProps {
   gitInfo: GitInfo | null;
   workingDir: string | null;
   onBranchSwitched: () => void;
+  onCreateWorktree?: (branch: string) => void;
 }
 
 export default function BranchSwitcher({
   gitInfo,
   workingDir,
   onBranchSwitched,
+  onCreateWorktree,
 }: BranchSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [branches, setBranches] = useState<BranchList | null>(null);
@@ -197,23 +199,40 @@ export default function BranchSwitcher({
               displayBranches.map((branch) => {
                 const isCurrent = branch === branches?.current;
                 return (
-                  <button
+                  <div
                     key={branch}
-                    onClick={() => !isCurrent && handleSwitch(branch)}
-                    disabled={isCurrent || switching}
-                    className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors duration-100 ${
+                    className={`flex items-center px-3 py-1.5 text-xs gap-2 transition-colors duration-100 group/branch ${
                       isCurrent
                         ? "text-[var(--accent-green)] bg-[var(--accent-green)]/5"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
                     }`}
                   >
-                    <span className="w-3 text-center text-[10px]">
-                      {isCurrent ? "\u2713" : ""}
-                    </span>
-                    <span className="truncate font-mono text-[11px]">
-                      {branch}
-                    </span>
-                  </button>
+                    <button
+                      onClick={() => !isCurrent && handleSwitch(branch)}
+                      disabled={isCurrent || switching}
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer disabled:cursor-default"
+                    >
+                      <span className="w-3 text-center text-[10px] shrink-0">
+                        {isCurrent ? "\u2713" : ""}
+                      </span>
+                      <span className="truncate font-mono text-[11px]">
+                        {branch}
+                      </span>
+                    </button>
+                    {!isCurrent && onCreateWorktree && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCreateWorktree(branch);
+                          setOpen(false);
+                        }}
+                        className="shrink-0 px-1.5 py-0.5 rounded text-[9px] text-[var(--accent-purple,#bc8cff)] border border-[var(--accent-purple,#bc8cff)]/30 bg-transparent hover:bg-[var(--accent-purple,#bc8cff)]/15 cursor-pointer opacity-0 group-hover/branch:opacity-100 transition-all duration-150"
+                        title="在新 tab 中打开此分支的 worktree"
+                      >
+                        ⑂ Worktree
+                      </button>
+                    )}
+                  </div>
                 );
               })
             )}

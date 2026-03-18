@@ -194,8 +194,20 @@ pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
             let extras = find_in_nvm("gemini");
             resolve_binary("gemini", &extras)
         }
+        // 火山 CodingPlan 走 claude 二进制，但注入不同的 API 环境变量
+        "volc" => resolve_binary("claude", &[]),
         _ => resolve_binary("claude", &[]),
     }
+}
+
+/// 读取火山 API Key（存放在 ~/.claude-desktop/.volc_key）
+fn read_volc_key() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let key_path = home.join(".claude-desktop").join(".volc_key");
+    std::fs::read_to_string(&key_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn augmented_path() -> String {
@@ -277,6 +289,14 @@ impl PtySession {
         let path_val = augmented_path();
         cmd.env("PATH", &path_val);
 
+        // 火山 CodingPlan：覆盖 Anthropic API 端点
+        if tool == "volc" {
+            cmd.env("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding");
+            if let Some(key) = read_volc_key() {
+                cmd.env("ANTHROPIC_API_KEY", key);
+            }
+        }
+
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -301,6 +321,7 @@ impl PtySession {
         let cli_cmd = {
             let mut args = Vec::new();
             if tool != "gemini" && tool != "codex" {
+                // claude / volc 模式：支持 yolo 和 resume
                 if yolo {
                     args.push("--dangerously-skip-permissions".to_string());
                 }

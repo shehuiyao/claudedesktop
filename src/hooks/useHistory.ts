@@ -6,6 +6,7 @@ export interface HistoryEntry {
   timestamp: string | null;
   project: string | null;
   sessionId: string | null;
+  tool: string | null;
 }
 
 export interface GroupedHistory {

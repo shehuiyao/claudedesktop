@@ -267,7 +267,12 @@ export default function Sidebar({ activeSessionId, onSelectSession, onNewSession
                       } disabled:opacity-40 disabled:cursor-default`}
                       title={entry.display ?? undefined}
                     >
-                      {sessionLabel(entry)}
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        {entry.tool === "codex" && (
+                          <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-[#10a37f]/15 text-[#10a37f] leading-none">C</span>
+                        )}
+                        <span className="truncate">{sessionLabel(entry)}</span>
+                      </span>
                     </button>
                     {entry.project && entry.sessionId && (
                       <button
