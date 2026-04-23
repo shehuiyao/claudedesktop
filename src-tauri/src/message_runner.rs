@@ -185,7 +185,7 @@ fn find_in_nvm(name: &str) -> Vec<PathBuf> {
 pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
     let home = dirs::home_dir().unwrap_or_default();
     match tool {
-        "codex" => {
+        "codex" | "codex_sub" => {
             let mut extras = vec![home.join(".npm-global/bin/codex")];
             extras.extend(find_in_nvm("codex"));
             resolve_binary("codex", &extras)
@@ -208,6 +208,27 @@ fn read_volc_key() -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// 确保 Codex 订阅隔离目录存在，并写入最小配置（信任当前工作目录）
+fn ensure_codex_subscription_home(working_dir: &str) -> Result<(), String> {
+    let codex_dir = std::path::Path::new("/tmp/codex-subscription-home/.codex");
+    if !codex_dir.exists() {
+        std::fs::create_dir_all(codex_dir)
+            .map_err(|e| format!("Failed to create codex subscription directory: {}", e))?;
+    }
+
+    let config_path = codex_dir.join("config.toml");
+    if !config_path.exists() {
+        let config_content = format!(
+            "[trusted_projects]\n\"{}\" = true\n",
+            working_dir
+        );
+        std::fs::write(&config_path, config_content)
+            .map_err(|e| format!("Failed to write config.toml: {}", e))?;
+    }
+
+    Ok(())
 }
 
 pub fn augmented_path() -> String {
@@ -320,7 +341,7 @@ impl PtySession {
         let writer_clone = writer.clone();
         let cli_cmd = {
             let mut args = Vec::new();
-            if tool != "gemini" && tool != "codex" {
+            if tool != "gemini" && tool != "codex" && tool != "codex_sub" {
                 // claude / volc 模式：支持 yolo 和 resume
                 if yolo {
                     args.push("--dangerously-skip-permissions".to_string());
@@ -330,10 +351,22 @@ impl PtySession {
                     args.push(sid.clone());
                 }
             }
-            if args.is_empty() {
-                format!("{}\n", tool_path.display())
+
+            // codex_sub 需要确保隔离目录存在，并在命令前设置 HOME
+            if tool == "codex_sub" {
+                let _ = ensure_codex_subscription_home(&working_dir);
+            }
+
+            let cmd_prefix = if tool == "codex_sub" {
+                "HOME=/tmp/codex-subscription-home "
             } else {
-                format!("{} {}\n", tool_path.display(), args.join(" "))
+                ""
+            };
+
+            if args.is_empty() {
+                format!("{}{}\n", cmd_prefix, tool_path.display())
+            } else {
+                format!("{}{} {}\n", cmd_prefix, tool_path.display(), args.join(" "))
             }
         };
         thread::spawn(move || {

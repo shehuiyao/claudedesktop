@@ -63,6 +63,10 @@ fn codex_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex"))
 }
 
+fn codex_sub_dir() -> PathBuf {
+    PathBuf::from("/tmp/codex-subscription-home/.codex")
+}
+
 /// Convert a project path like `/Users/foo/bar` to its slug `-Users-foo-bar`.
 /// Claude Code replaces all non-alphanumeric characters (except `-`) with `-`.
 fn project_path_to_slug(project_path: &str) -> String {
@@ -228,50 +232,84 @@ fn read_codex_session_cwd(path: &PathBuf) -> Option<String> {
 
 /// Build a map from Codex session_id → (cwd, file_path) by scanning ~/.codex/sessions/.
 fn build_codex_session_map() -> HashMap<String, (String, PathBuf)> {
-    let sessions_dir = match codex_dir() {
-        Some(d) => d.join("sessions"),
-        None => return HashMap::new(),
-    };
-
     let mut map = HashMap::new();
-    for path in walk_jsonl_files(&sessions_dir) {
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        if let Some(session_id) = extract_session_id_from_filename(&stem) {
-            if let Some(cwd) = read_codex_session_cwd(&path) {
-                map.insert(session_id, (cwd, path));
+
+    // Scan default directory first
+    if let Some(d) = codex_dir() {
+        let sessions_dir = d.join("sessions");
+        for path in walk_jsonl_files(&sessions_dir) {
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if let Some(session_id) = extract_session_id_from_filename(&stem) {
+                if let Some(cwd) = read_codex_session_cwd(&path) {
+                    map.insert(session_id, (cwd, path));
+                }
             }
         }
     }
+
+    // Then scan subscription directory (overwrites duplicates if same session_id, which is fine)
+    let sessions_dir = codex_sub_dir().join("sessions");
+    if sessions_dir.exists() {
+        for path in walk_jsonl_files(&sessions_dir) {
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if let Some(session_id) = extract_session_id_from_filename(&stem) {
+                if let Some(cwd) = read_codex_session_cwd(&path) {
+                    map.insert(session_id, (cwd, path));
+                }
+            }
+        }
+    }
+
     map
 }
 
 fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
-    let codex = codex_dir().ok_or("Cannot find home directory")?;
-    let index_path = codex.join("session_index.jsonl");
-
-    if !index_path.exists() {
-        return Ok(vec![]);
-    }
-
-    // Build session map to get cwd for each session
+    // Build session map to get cwd for each session (already includes both directories)
     let session_map = build_codex_session_map();
 
-    let file = fs::File::open(&index_path)
-        .map_err(|e| format!("Failed to open codex session_index: {}", e))?;
-    let reader = BufReader::new(file);
-
     let mut all_entries: Vec<serde_json::Value> = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+
+    // Read from default directory
+    if let Some(codex) = codex_dir() {
+        let index_path = codex.join("session_index.jsonl");
+        if index_path.exists() {
+            let file = fs::File::open(&index_path)
+                .map_err(|e| format!("Failed to open codex session_index: {}", e))?;
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    all_entries.push(val);
+                }
+            }
         }
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            all_entries.push(val);
+    }
+
+    // Read from subscription directory
+    let index_path = codex_sub_dir().join("session_index.jsonl");
+    if index_path.exists() {
+        let file = fs::File::open(&index_path)
+            .map_err(|e| format!("Failed to open codex subscription session_index: {}", e))?;
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                all_entries.push(val);
+            }
         }
     }
 
@@ -293,12 +331,23 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
         let updated_at = entry["updated_at"].as_str().map(|s| s.to_string());
         let cwd = session_map.get(&id).map(|(cwd, _)| cwd.clone());
 
+        // Check if this session came from subscription directory
+        let tool = if let Some((_, path)) = session_map.get(&id) {
+            if path.starts_with("/tmp/codex-subscription-home") {
+                Some("codex_sub".to_string())
+            } else {
+                Some("codex".to_string())
+            }
+        } else {
+            Some("codex".to_string())
+        };
+
         entries.push(HistoryEntry {
             display: thread_name,
             timestamp: updated_at,
             project: cwd,
             session_id: Some(id),
-            tool: Some("codex".to_string()),
+            tool,
         });
     }
 
@@ -308,12 +357,26 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
 
 /// Find a Codex session file by scanning ~/.codex/sessions/ for a file ending with `{session_id}.jsonl`.
 fn find_codex_session_file(session_id: &str) -> Option<PathBuf> {
-    let sessions_dir = codex_dir()?.join("sessions");
     let suffix = format!("{}.jsonl", session_id);
-    for path in walk_jsonl_files(&sessions_dir) {
-        if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-            if fname.ends_with(&suffix) {
-                return Some(path);
+    // Check default directory first
+    if let Some(codex) = codex_dir() {
+        let sessions_dir = codex.join("sessions");
+        for path in walk_jsonl_files(&sessions_dir) {
+            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                if fname.ends_with(&suffix) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    // Check subscription directory if not found
+    let sessions_dir = codex_sub_dir().join("sessions");
+    if sessions_dir.exists() {
+        for path in walk_jsonl_files(&sessions_dir) {
+            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                if fname.ends_with(&suffix) {
+                    return Some(path);
+                }
             }
         }
     }

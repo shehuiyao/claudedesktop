@@ -24,7 +24,7 @@ function RevealButton({ path }: { path: string }) {
           console.error("Failed to reveal in Finder:", err);
         }
       }}
-      className="shrink-0 w-4 h-4 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 opacity-0 group-hover:opacity-100"
+      className="shrink-0 w-4 h-4 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 opacity-80 hover:opacity-100"
       title="在 Finder 中显示"
     >
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">

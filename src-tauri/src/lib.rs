@@ -322,68 +322,52 @@ fn get_git_info(path: String) -> Result<GitInfo, String> {
     let mut additions: i64 = 0;
     let mut deletions: i64 = 0;
 
-    // 统计当前分支相对于 main/master 的全部改动（已提交 + 未提交）
-    // 先找到默认分支（origin/main 或 origin/master）
-    let default_branch = {
-        let check_main = Command::new("git")
-            .args(["rev-parse", "--verify", "origin/main"])
-            .current_dir(&path)
-            .output();
-        if check_main.map(|o| o.status.success()).unwrap_or(false) {
-            "origin/main"
-        } else {
-            "origin/master"
+    // 解析 git diff --numstat 输出，累加到 additions/deletions
+    let accumulate_numstat = |output: &[u8], add: &mut i64, del: &mut i64| {
+        for line in String::from_utf8_lossy(output).lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                if let Ok(a) = parts[0].parse::<i64>() { *add += a; }
+                if let Ok(d) = parts[1].parse::<i64>() { *del += d; }
+            }
         }
     };
 
-    // git diff --numstat <default_branch>...HEAD: 分支上的已提交改动
-    let branch_diff = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}...HEAD", default_branch)])
-        .current_dir(&path)
-        .output();
+    // 不在默认分支时，统计分支上的已提交改动
+    if branch != "main" && branch != "master" {
+        let has_origin_main = Command::new("git")
+            .args(["rev-parse", "--verify", "origin/main"])
+            .current_dir(&path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let default_branch = if has_origin_main { "origin/main" } else { "origin/master" };
 
-    if let Ok(output) = branch_diff {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines() {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    if let Ok(add) = parts[0].parse::<i64>() { additions += add; }
-                    if let Ok(del) = parts[1].parse::<i64>() { deletions += del; }
-                }
+        if let Ok(output) = Command::new("git")
+            .args(["diff", "--numstat", &format!("{}...HEAD", default_branch)])
+            .current_dir(&path)
+            .output()
+        {
+            if output.status.success() {
+                accumulate_numstat(&output.stdout, &mut additions, &mut deletions);
             }
         }
     }
 
-    // git diff --numstat HEAD: 未提交的改动（staged + unstaged）
-    let uncommitted_diff = Command::new("git")
+    // 未提交的改动（staged + unstaged）
+    if let Ok(output) = Command::new("git")
         .args(["diff", "--numstat", "HEAD"])
         .current_dir(&path)
-        .output();
-
-    if let Ok(output) = uncommitted_diff {
+        .output()
+    {
         if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines() {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    if let Ok(add) = parts[0].parse::<i64>() { additions += add; }
-                    if let Ok(del) = parts[1].parse::<i64>() { deletions += del; }
-                }
-            }
+            accumulate_numstat(&output.stdout, &mut additions, &mut deletions);
         }
     } else {
-        // HEAD 不存在（新仓库无 commit），分别统计 staged 和 unstaged
+        // HEAD 不存在（新仓库无 commit）
         for args in &[vec!["diff", "--cached", "--numstat"], vec!["diff", "--numstat"]] {
             if let Ok(output) = Command::new("git").args(args).current_dir(&path).output() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                for line in text.lines() {
-                    let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(add) = parts[0].parse::<i64>() { additions += add; }
-                        if let Ok(del) = parts[1].parse::<i64>() { deletions += del; }
-                    }
-                }
+                accumulate_numstat(&output.stdout, &mut additions, &mut deletions);
             }
         }
     }
@@ -1083,6 +1067,22 @@ fn get_git_toplevel(working_dir: &str) -> Result<String, String> {
 }
 
 /// 根据工作目录的 git 分支名，定位 bugs.json 路径
+/// 生成 {项目名}-{分支名} 格式的目录路径，放在项目父目录下
+fn make_branch_directory_path(project_path: &str, branch: &str) -> std::path::PathBuf {
+    let project_dir = std::path::Path::new(project_path);
+    let project_name = project_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
+    // 分支名中的 / 替换为 - 作为目录名
+    let safe_branch = branch.replace('/', "-");
+    // 如果项目已经是根目录，则在自身下创建（这种情况很少见）
+    project_dir
+        .parent()
+        .unwrap_or(project_dir)
+        .join(format!("{}-{}", project_name, safe_branch))
+}
+
 fn get_bugs_json_path(working_dir: &str) -> Result<std::path::PathBuf, String> {
     let output = std::process::Command::new("git")
         .args(["branch", "--show-current"])
@@ -1096,16 +1096,12 @@ fn get_bugs_json_path(working_dir: &str) -> Result<std::path::PathBuf, String> {
     }
 
     // bugs 目录在项目上一层的 Task/{PROJECT_NAME}-{BRANCH}/bugs/ 下
-    let project_dir = std::path::Path::new(working_dir);
-    let project_name = project_dir
-        .file_name()
-        .ok_or("无法获取项目名")?
-        .to_string_lossy();
-    let parent_dir = project_dir.parent().ok_or("无法获取项目上级目录")?;
-    let folder_name = format!("{}-{}", project_name, branch);
-    let bugs_json = parent_dir
+    let branch_dir = make_branch_directory_path(working_dir, &branch);
+    let bugs_json = branch_dir
+        .parent()
+        .ok_or("无法获取分支目录上级")?
         .join("Task")
-        .join(&folder_name)
+        .join(branch_dir.file_name().unwrap())
         .join("bugs")
         .join("bugs.json");
 
@@ -1326,6 +1322,57 @@ fn reveal_quick_actions_config(working_dir: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+struct WorktreeResult {
+    path: String,
+    branch: String,
+}
+
+#[tauri::command]
+fn create_worktree(path: String, branch: String) -> Result<WorktreeResult, String> {
+    let worktree_dir = make_branch_directory_path(&path, &branch);
+
+    // 直接让 git 处理错误，不提前检查存在性（避免 TOCTOU 竞态条件）
+    let output = std::process::Command::new("git")
+        .args(["worktree", "add", &worktree_dir.to_string_lossy(), &branch])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("执行 git worktree add 失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // 如果目录已存在 git 会报错，此时直接返回已有路径给调用方
+        if stderr.contains("already exists") {
+            return Ok(WorktreeResult {
+                path: worktree_dir.to_string_lossy().to_string(),
+                branch,
+            });
+        }
+        return Err(format!("创建 worktree 失败: {}", stderr.trim()));
+    }
+
+    Ok(WorktreeResult {
+        path: worktree_dir.to_string_lossy().to_string(),
+        branch,
+    })
+}
+
+#[tauri::command]
+fn remove_worktree(path: String, worktree_path: String) -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["worktree", "remove", &worktree_path, "--force"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("执行 git worktree remove 失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("删除 worktree 失败: {}", stderr.trim()));
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1375,6 +1422,8 @@ pub fn run() {
             get_bug_image,
             load_quick_actions,
             reveal_quick_actions_config,
+            create_worktree,
+            remove_worktree,
         ])
         .on_window_event(|window, event| {
             match event {

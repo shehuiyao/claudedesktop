@@ -565,6 +565,15 @@ function App() {
                           </div>
                         </button>
                         <button
+                          onClick={() => handleStartTerminal(tab.id, false, "codex_sub")}
+                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                        >
+                          <div className="text-sm font-medium text-[#10a37f] mb-1">Codex 订阅</div>
+                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                            使用隔离目录启动，不影响默认 API
+                          </div>
+                        </button>
+                        <button
                           onClick={() => handleStartTerminal(tab.id, false, "volc")}
                           className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#FF6B35] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
                         >

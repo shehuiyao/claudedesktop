@@ -268,8 +268,10 @@ export default function Sidebar({ activeSessionId, onSelectSession, onNewSession
                       title={entry.display ?? undefined}
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        {entry.tool === "codex" && (
-                          <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-[#10a37f]/15 text-[#10a37f] leading-none">C</span>
+                        {entry.tool === "codex" ? (
+                          <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-[var(--text-muted)]/15 text-[var(--text-muted)] leading-none border border-[var(--text-muted)]/30">C</span>
+                        ) : (
+                          <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 leading-none">C</span>
                         )}
                         <span className="truncate">{sessionLabel(entry)}</span>
                       </span>

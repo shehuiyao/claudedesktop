@@ -444,7 +444,7 @@ export default function LiveTerminal({ workingDir, yolo, tool, resumeSessionId, 
       )}
       {starting && (
         <div className="px-3 py-1 text-xs text-[var(--text-secondary)] bg-[var(--bg-secondary)] border-b border-[var(--border-color)]">
-          Starting {{ claude: "Claude", gemini: "Gemini", codex: "Codex", volc: "火山 CodingPlan" }[tool ?? "claude"]} session...
+          Starting {{ claude: "Claude", gemini: "Gemini", codex: "Codex", codex_sub: "Codex 订阅", volc: "火山 CodingPlan" }[tool ?? "claude"]} session...
         </div>
       )}
       <div className="flex-1 min-h-0 p-2">

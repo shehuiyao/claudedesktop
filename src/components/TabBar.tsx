@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-export type CliTool = "claude" | "gemini" | "codex" | "volc";
+export type CliTool = "claude" | "gemini" | "codex" | "codex_sub" | "volc";
 
 export interface Tab {
   id: string;

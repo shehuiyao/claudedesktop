@@ -1,0 +1,42 @@
+<h2>你想要的"切换模型"是哪种？</h2>
+<p class="subtitle">当前应用已支持切换 Claude / Gemini / Codex / 火山，这次想扩展到哪个层次？</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>更多 CLI 工具包装</h3>
+      <p>继续沿用现有架构（PTY 包装 CLI），接入更多命令行 AI 工具，例如 Kimi、通义千问 CLI、Cursor CLI 等。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>改动小，风险低</li><li>与现有架构一致</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>依赖各厂商提供 CLI 工具</li><li>体验受限于 CLI 本身</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>会话内切换具体模型版本</h3>
+      <p>在新建 Tab 时，可以选择具体模型版本：比如 claude-opus-4 / claude-sonnet-4.5 / claude-haiku，或 codex-mini / codex-full。通过 CLI 参数 <code>--model</code> 传递。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>精细控制模型版本</li><li>无需改变整体架构</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>仅限 CLI 支持的模型</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>直接 API 调用（像 OpenClaw 一样）</h3>
+      <p>新增一种"API 模式"，绕过 CLI，直接调用各大厂商 API（Anthropic、OpenAI、Gemini、火山、通义等），自由选择任何模型。用自己的 API Key，低延迟，无 CLI 依赖。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>模型选择自由度最高</li><li>不依赖第三方 CLI</li><li>可精细控制 system prompt、temperature 等</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>需要较大改动（Rust 后端新增 HTTP 调用）</li><li>需自行管理各厂商 API Key</li><li>失去 Claude Code / Codex 的工程化功能（工具调用、文件操作等）</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:24px">也可以多选——例如同时要 B + C</p>
