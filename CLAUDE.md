@@ -27,6 +27,15 @@
 - 状态管理用 useState/useCallback/useRef，不引入额外状态库
 - CSS 使用 Tailwind + CSS 变量 (var(--xxx)) 支持主题切换
 
+### 设计规范
+- 涉及可见 UI、交互层级、组件样式时，必须先阅读 `docs/design-spec.md`
+- 优先复用现有暗色工作台风格、圆角、描边、CSS 变量和 Tailwind 结构
+- 不要为单个页面单独创造一套新的视觉语言
+
+### Launchpad 启动规范
+- 涉及项目启动命令、前后端启动卡片、conda/py 环境时，必须先阅读 `docs/launchpad-startup.md`
+- 后端启动优先使用 `conda run` 或 Python 绝对路径，避免长期停留在 `source activate` 后的 shell 环境
+
 ### Git Commit 规范
 - **统一用中文**，不混用英文
 - **一个 commit 只做一件事**，不要把多个功能塞进一个 commit

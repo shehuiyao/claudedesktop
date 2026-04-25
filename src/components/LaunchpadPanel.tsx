@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import LiveTerminal from "./LiveTerminal";
 
@@ -21,7 +22,7 @@ interface LaunchpadData {
   activeGroupId: string;
 }
 
-type ProjectRuntimeStatus = "idle" | "starting" | "running" | "stopped" | "error";
+type ProjectRuntimeStatus = "idle" | "starting" | "running" | "detected" | "stopped" | "error";
 
 interface ProjectRuntimeState {
   status: ProjectRuntimeStatus;
@@ -30,8 +31,21 @@ interface ProjectRuntimeState {
   lastError: string;
 }
 
+interface DetectedRunningProject {
+  project_id: string;
+  name: string;
+  working_dir: string;
+  pid: number;
+  command: string;
+  port?: string | null;
+}
+
 const STORAGE_KEY = "claude-desktop-launchpad-projects";
 const DEFAULT_GROUP_NAME = "默认分组";
+
+function isActiveRuntimeStatus(status: ProjectRuntimeStatus) {
+  return status === "starting" || status === "running" || status === "detected";
+}
 
 function createId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -147,6 +161,8 @@ function statusText(status: ProjectRuntimeStatus) {
       return "启动中";
     case "running":
       return "运行中";
+    case "detected":
+      return "系统运行";
     case "error":
       return "异常";
     case "stopped":
@@ -161,6 +177,7 @@ function statusClassName(status: ProjectRuntimeStatus) {
     case "starting":
       return "text-[var(--accent-orange)] bg-[var(--accent-orange)]/12 border-[var(--accent-orange)]/30";
     case "running":
+    case "detected":
       return "text-[var(--accent-green)] bg-[var(--accent-green)]/12 border-[var(--accent-green)]/30";
     case "error":
       return "text-[var(--accent-red)] bg-[var(--accent-red)]/12 border-[var(--accent-red)]/30";
@@ -174,6 +191,9 @@ function statusClassName(status: ProjectRuntimeStatus) {
 export default function LaunchpadPanel() {
   const [launchpadData, setLaunchpadData] = useState<LaunchpadData>(loadLaunchpadData);
   const [runtime, setRuntime] = useState<Record<string, ProjectRuntimeState>>({});
+  const [detectedProjects, setDetectedProjects] = useState<DetectedRunningProject[]>([]);
+  const [detectingProjects, setDetectingProjects] = useState(false);
+  const [detectError, setDetectError] = useState("");
   const { groups, projects, activeGroupId } = launchpadData;
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
   const activeGroupProjects = useMemo(
@@ -185,9 +205,7 @@ export default function LaunchpadPanel() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(launchpadData));
   }, [launchpadData]);
 
-  const runningCount = Object.values(runtime).filter(
-    (item) => item.status === "starting" || item.status === "running",
-  ).length;
+  const runningCount = Object.values(runtime).filter((item) => isActiveRuntimeStatus(item.status)).length;
 
   const updateProject = (id: string, patch: Partial<LaunchpadProject>) => {
     setLaunchpadData((prev) => ({
@@ -273,6 +291,16 @@ export default function LaunchpadPanel() {
     }));
   };
 
+  const handleRestart = (projectId: string) => {
+    setProjectRuntime(projectId, (current) => ({
+      ...current,
+      status: "starting",
+      runKey: current.runKey + 1,
+      expanded: true,
+      lastError: "",
+    }));
+  };
+
   const handleStop = (projectId: string) => {
     setProjectRuntime(projectId, (current) => ({
       ...current,
@@ -281,26 +309,71 @@ export default function LaunchpadPanel() {
     }));
   };
 
+  const handleDetectRunningProjects = async () => {
+    setDetectingProjects(true);
+    setDetectError("");
+    try {
+      const result = await invoke<DetectedRunningProject[]>("detect_running_launchpad_projects", {
+        projects: projects.map((project) => ({
+          id: project.id,
+          name: project.name || getProjectName(project.workingDir),
+          working_dir: project.workingDir,
+        })),
+      });
+      setDetectedProjects(result);
+      const detectedIds = new Set(result.map((project) => project.project_id));
+      setRuntime((prev) => {
+        const next = { ...prev };
+        for (const project of projects) {
+          const current = next[project.id];
+          if (current?.status === "starting" || current?.status === "running") {
+            continue;
+          }
+          if (detectedIds.has(project.id)) {
+            next[project.id] = {
+              ...(current ?? emptyRuntime()),
+              status: "detected",
+              expanded: false,
+              lastError: "",
+            };
+          } else if (current?.status === "detected") {
+            next[project.id] = {
+              ...current,
+              status: "idle",
+            };
+          }
+        }
+        return next;
+      });
+    } catch (error) {
+      setDetectedProjects([]);
+      setDetectError(String(error));
+    } finally {
+      setDetectingProjects(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(57,210,192,0.09),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(88,166,255,0.08),transparent_24%)]">
       <div className="mx-auto max-w-[1600px] px-6 py-6">
-        <div className="mb-6 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 p-5 shadow-[0_18px_60px_var(--shadow-color)] backdrop-blur">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--accent-cyan)]">
-                Project Launchpad
-              </div>
-              <div className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">
+        <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 p-5 shadow-[0_18px_60px_var(--shadow-color)] backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-2xl font-semibold text-[var(--text-primary)]">
                 前后端启动工作台
               </div>
-              <div className="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
-                每个卡片对应一个项目窗口。目录和启动命令会自动记住，之后只需要点一下就能启动或关闭，并且能直接看到终端输出。
-              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="rounded-full border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
+            <div className="flex shrink-0 items-center gap-3">
+              <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
                 {projects.length} 个项目 · {groups.length} 个分组 · {runningCount} 个运行中
               </div>
+              <button
+                onClick={handleDetectRunningProjects}
+                disabled={detectingProjects || projects.length === 0}
+                className="rounded-xl border border-[var(--border-color)] px-4 py-2 text-sm font-medium text-[var(--text-secondary)] transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {detectingProjects ? "检测中" : "检测运行"}
+              </button>
               <button
                 onClick={addProject}
                 className="rounded-xl bg-[var(--accent-cyan)] px-4 py-2 text-sm font-medium text-[#0d1117] transition hover:brightness-110 active:brightness-95"
@@ -311,6 +384,44 @@ export default function LaunchpadPanel() {
           </div>
         </div>
 
+        {(detectedProjects.length > 0 || detectError) && (
+          <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-4 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-[var(--text-primary)]">
+                系统运行检测
+              </div>
+              <button
+                onClick={() => {
+                  setDetectedProjects([]);
+                  setDetectError("");
+                }}
+                className="rounded-xl border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+              >
+                收起
+              </button>
+            </div>
+            {detectError ? (
+              <div className="rounded-xl border border-[var(--accent-red)]/25 bg-[var(--accent-red)]/10 px-3 py-2 text-xs text-[var(--accent-red)]">
+                {detectError}
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {detectedProjects.map((project) => (
+                  <div
+                    key={`${project.project_id}-${project.pid}-${project.port ?? "unknown"}`}
+                    className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
+                  >
+                    <span className="font-medium text-[var(--text-primary)]">{project.name}</span>
+                    {project.port && <span className="text-[var(--accent-green)]">端口 {project.port}</span>}
+                    <span>PID {project.pid}</span>
+                    <span className="truncate text-[var(--text-muted)]">{project.command}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-3 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
           <div className="flex flex-wrap items-center gap-2">
             {groups.map((group) => {
@@ -318,25 +429,31 @@ export default function LaunchpadPanel() {
               const groupProjects = projects.filter((project) => project.groupId === group.id);
               const groupRunningCount = groupProjects.filter((project) => {
                 const state = runtime[project.id];
-                return state?.status === "starting" || state?.status === "running";
+                return state ? isActiveRuntimeStatus(state.status) : false;
               }).length;
 
               return (
-                <button
+                <div
                   key={group.id}
                   onClick={() => selectGroup(group.id)}
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                  className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
                     isActiveGroup
                       ? "border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--text-primary)]"
                       : "border-[var(--border-color)] bg-[var(--bg-primary)]/80 text-[var(--text-secondary)] hover:border-[var(--accent-cyan)]/60 hover:text-[var(--text-primary)]"
                   }`}
                 >
                   <span className="h-2 w-2 rounded-full bg-[var(--accent-cyan)]" />
-                  <span className="text-xs font-medium">{group.name || DEFAULT_GROUP_NAME}</span>
+                  <input
+                    value={group.name}
+                    onFocus={() => selectGroup(group.id)}
+                    onChange={(event) => updateGroup(group.id, { name: event.target.value })}
+                    className="w-24 border-none bg-transparent text-xs font-medium text-inherit outline-none placeholder:text-[var(--text-muted)]"
+                    placeholder={DEFAULT_GROUP_NAME}
+                  />
                   <span className="text-[10px] text-[var(--text-muted)]">
                     {groupProjects.length} 项 · {groupRunningCount} 运行
                   </span>
-                </button>
+                </div>
               );
             })}
             <button
@@ -347,22 +464,6 @@ export default function LaunchpadPanel() {
             </button>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-[var(--border-color)] pt-3">
-            <label className="min-w-[260px] flex-1">
-              <div className="mb-1.5 text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                Group Name
-              </div>
-              <input
-                value={activeGroup.name}
-                onChange={(event) => updateGroup(activeGroup.id, { name: event.target.value })}
-                className="w-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
-                placeholder="比如：worktree 主线 / worktree 功能分支"
-              />
-            </label>
-            <div className="rounded-full border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
-              当前分组：{activeGroupProjects.length} 个项目
-            </div>
-          </div>
         </div>
 
         {projects.length === 0 ? (
@@ -404,6 +505,7 @@ export default function LaunchpadPanel() {
             {activeGroupProjects.map((project) => {
               const state = runtime[project.id] ?? emptyRuntime();
               const isRunning = state.status === "starting" || state.status === "running";
+              const isDetectedRunning = state.status === "detected";
               const canStart = project.workingDir.trim() !== "" && project.startCommand.trim() !== "";
 
               return (
@@ -433,15 +535,23 @@ export default function LaunchpadPanel() {
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button
                         onClick={() => (isRunning ? handleStop(project.id) : handleStart(project.id))}
-                        disabled={!isRunning && !canStart}
+                        disabled={isDetectedRunning || (!isRunning && !canStart)}
                         className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                           isRunning
                             ? "bg-[var(--accent-red)] text-white hover:brightness-110"
                             : "bg-[var(--accent-green)] text-[#08140d] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                         }`}
                       >
-                        {isRunning ? "关闭" : "启动"}
+                        {isRunning ? "关闭" : isDetectedRunning ? "已在运行" : "启动"}
                       </button>
+                      {isRunning && (
+                        <button
+                          onClick={() => handleRestart(project.id)}
+                          className="rounded-lg border border-[var(--accent-cyan)]/45 px-3 py-1.5 text-xs text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10 hover:text-[var(--text-primary)]"
+                        >
+                          重启
+                        </button>
+                      )}
                       <button
                         onClick={() => pickWorkingDir(project.id)}
                         className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)]"
@@ -465,17 +575,22 @@ export default function LaunchpadPanel() {
                         删除
                       </button>
                       {groups.length > 1 && (
-                        <select
-                          value={project.groupId}
-                          onChange={(event) => updateProject(project.id, { groupId: event.target.value })}
-                          className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] outline-none transition hover:border-[var(--accent-cyan)] focus:border-[var(--accent-cyan)]"
-                        >
-                          {groups.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              移到：{group.name || DEFAULT_GROUP_NAME}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="relative inline-flex items-center">
+                          <select
+                            value={project.groupId}
+                            onChange={(event) => updateProject(project.id, { groupId: event.target.value })}
+                            className="h-9 appearance-none rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 pr-8 text-xs text-[var(--text-secondary)] outline-none transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)] focus:border-[var(--accent-cyan)] focus:text-[var(--text-primary)]"
+                          >
+                            {groups.map((group) => (
+                              <option key={group.id} value={group.id} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
+                                移到：{group.name || DEFAULT_GROUP_NAME}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-3 text-[10px] text-[var(--text-muted)]">
+                            ▾
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -501,8 +616,11 @@ export default function LaunchpadPanel() {
                         value={project.startCommand}
                         onChange={(e) => updateProject(project.id, { startCommand: e.target.value })}
                         className="min-h-[92px] w-full resize-y rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2.5 font-mono text-xs leading-6 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
-                        placeholder="npm run dev"
+                        placeholder="前端：PORT=3010 npm start&#10;后端：conda run -n pf-backend-py37 python app.py --debug=1 --mode=3"
                       />
+                      <div className="mt-1.5 text-[11px] leading-5 text-[var(--text-muted)]">
+                        后端建议用 `conda run` 或绝对 Python 路径启动，少用 `source activate`，避免服务挂掉后 shell 还停在 py 环境里。
+                      </div>
                     </label>
 
                     {state.lastError && (

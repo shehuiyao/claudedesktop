@@ -5,8 +5,33 @@ mod message_runner;
 use chat_runner::ChatProcess;
 use message_runner::PtySession;
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
+
+#[derive(serde::Deserialize)]
+struct LaunchpadProjectProbe {
+    id: String,
+    name: String,
+    working_dir: String,
+}
+
+#[derive(serde::Serialize)]
+struct RunningLaunchpadProject {
+    project_id: String,
+    name: String,
+    working_dir: String,
+    pid: u32,
+    command: String,
+    port: Option<String>,
+}
+
+#[derive(Default)]
+struct ListeningProcess {
+    pid: u32,
+    command: String,
+    ports: Vec<String>,
+}
 
 struct AppState {
     sessions: Mutex<HashMap<String, PtySession>>,
@@ -123,6 +148,115 @@ fn close_session(state: State<'_, AppState>, session_id: String) -> Result<(), S
         session.kill();
     }
     Ok(())
+}
+
+fn normalize_path(path: &str) -> String {
+    path.trim().trim_end_matches('/').to_string()
+}
+
+fn path_contains(parent: &str, child: &str) -> bool {
+    let parent = normalize_path(parent);
+    let child = normalize_path(child);
+    !parent.is_empty() && (child == parent || child.starts_with(&format!("{}/", parent)))
+}
+
+fn parse_port(address: &str) -> Option<String> {
+    let last = address.rsplit(':').next()?.trim();
+    if !last.is_empty() && last.chars().all(|item| item.is_ascii_digit()) {
+        Some(last.to_string())
+    } else {
+        None
+    }
+}
+
+fn process_cwd(pid: u32) -> Option<String> {
+    let output = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n').map(|value| value.to_string()))
+}
+
+#[tauri::command]
+fn detect_running_launchpad_projects(
+    projects: Vec<LaunchpadProjectProbe>,
+) -> Result<Vec<RunningLaunchpadProject>, String> {
+    let output = Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"])
+        .output()
+        .map_err(|e| format!("无法执行 lsof: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let mut processes: Vec<ListeningProcess> = Vec::new();
+    let mut current: Option<ListeningProcess> = None;
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(pid) = line.strip_prefix('p').and_then(|value| value.parse::<u32>().ok()) {
+            if let Some(process) = current.take() {
+                processes.push(process);
+            }
+            current = Some(ListeningProcess {
+                pid,
+                ..Default::default()
+            });
+        } else if let Some(command) = line.strip_prefix('c') {
+            if let Some(process) = current.as_mut() {
+                process.command = command.to_string();
+            }
+        } else if let Some(address) = line.strip_prefix('n') {
+            if let (Some(process), Some(port)) = (current.as_mut(), parse_port(address)) {
+                if !process.ports.contains(&port) {
+                    process.ports.push(port);
+                }
+            }
+        }
+    }
+
+    if let Some(process) = current.take() {
+        processes.push(process);
+    }
+
+    let mut cwd_cache: HashMap<u32, Option<String>> = HashMap::new();
+    let mut matches = Vec::new();
+
+    for process in processes {
+        let cwd = cwd_cache
+            .entry(process.pid)
+            .or_insert_with(|| process_cwd(process.pid));
+        let Some(cwd) = cwd.as_deref() else {
+            continue;
+        };
+
+        for project in &projects {
+            if project.working_dir.trim().is_empty() {
+                continue;
+            }
+            if path_contains(&project.working_dir, cwd) {
+                matches.push(RunningLaunchpadProject {
+                    project_id: project.id.clone(),
+                    name: if project.name.trim().is_empty() {
+                        project.working_dir.clone()
+                    } else {
+                        project.name.clone()
+                    },
+                    working_dir: project.working_dir.clone(),
+                    pid: process.pid,
+                    command: process.command.clone(),
+                    port: process.ports.first().cloned(),
+                });
+            }
+        }
+    }
+
+    Ok(matches)
 }
 
 // ---- Chat mode commands ----
@@ -1402,6 +1536,7 @@ pub fn run() {
             send_input,
             resize_session,
             close_session,
+            detect_running_launchpad_projects,
             check_claude_installed,
             list_directory,
             list_rule_files,
