@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import LiveTerminal from "./LiveTerminal";
 
@@ -7,6 +7,18 @@ interface LaunchpadProject {
   name: string;
   workingDir: string;
   startCommand: string;
+  groupId: string;
+}
+
+interface LaunchpadGroup {
+  id: string;
+  name: string;
+}
+
+interface LaunchpadData {
+  groups: LaunchpadGroup[];
+  projects: LaunchpadProject[];
+  activeGroupId: string;
 }
 
 type ProjectRuntimeStatus = "idle" | "starting" | "running" | "stopped" | "error";
@@ -19,6 +31,7 @@ interface ProjectRuntimeState {
 }
 
 const STORAGE_KEY = "claude-desktop-launchpad-projects";
+const DEFAULT_GROUP_NAME = "默认分组";
 
 function createId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -27,12 +40,21 @@ function createId() {
   return `launch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function createProject(seed?: Partial<LaunchpadProject>): LaunchpadProject {
+function createGroup(seed?: Partial<LaunchpadGroup>): LaunchpadGroup {
+  return {
+    id: createId(),
+    name: DEFAULT_GROUP_NAME,
+    ...seed,
+  };
+}
+
+function createProject(seed?: Partial<LaunchpadProject>, groupId = ""): LaunchpadProject {
   return {
     id: createId(),
     name: "",
     workingDir: "",
     startCommand: "npm run dev",
+    groupId,
     ...seed,
   };
 }
@@ -42,17 +64,71 @@ function getProjectName(path: string) {
   return parts[parts.length - 1] ?? path;
 }
 
-function loadProjects(): LaunchpadProject[] {
+function normalizeLaunchpadData(value: unknown): LaunchpadData {
+  const fallbackGroup = createGroup();
+  if (Array.isArray(value)) {
+    const projects = value
+      .filter((item): item is Partial<LaunchpadProject> => !!item && typeof item === "object")
+      .map((item) => createProject(item, fallbackGroup.id));
+
+    return {
+      groups: [fallbackGroup],
+      projects,
+      activeGroupId: fallbackGroup.id,
+    };
+  }
+
+  if (!value || typeof value !== "object") {
+    return {
+      groups: [fallbackGroup],
+      projects: [],
+      activeGroupId: fallbackGroup.id,
+    };
+  }
+
+  const data = value as Record<string, unknown>;
+  const groups = Array.isArray(data.groups)
+    ? data.groups
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((item, index) =>
+          createGroup({
+            id: typeof item.id === "string" && item.id ? item.id : createId(),
+            name: typeof item.name === "string" && item.name.trim() ? item.name : `${DEFAULT_GROUP_NAME} ${index + 1}`,
+          }),
+        )
+    : [];
+
+  const safeGroups = groups.length > 0 ? groups : [fallbackGroup];
+  const firstGroupId = safeGroups[0].id;
+  const groupIds = new Set(safeGroups.map((group) => group.id));
+  const projects = Array.isArray(data.projects)
+    ? data.projects
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((item) => {
+          const groupId = typeof item.groupId === "string" && groupIds.has(item.groupId) ? item.groupId : firstGroupId;
+          return createProject(item, groupId);
+        })
+    : [];
+
+  const activeGroupId = typeof data.activeGroupId === "string" && groupIds.has(data.activeGroupId)
+    ? data.activeGroupId
+    : firstGroupId;
+
+  return {
+    groups: safeGroups,
+    projects,
+    activeGroupId,
+  };
+}
+
+function loadLaunchpadData(): LaunchpadData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) return normalizeLaunchpadData(null);
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is Partial<LaunchpadProject> => !!item && typeof item === "object")
-      .map((item) => createProject(item));
+    return normalizeLaunchpadData(parsed);
   } catch {
-    return [];
+    return normalizeLaunchpadData(null);
   }
 }
 
@@ -96,29 +172,64 @@ function statusClassName(status: ProjectRuntimeStatus) {
 }
 
 export default function LaunchpadPanel() {
-  const [projects, setProjects] = useState<LaunchpadProject[]>(loadProjects);
+  const [launchpadData, setLaunchpadData] = useState<LaunchpadData>(loadLaunchpadData);
   const [runtime, setRuntime] = useState<Record<string, ProjectRuntimeState>>({});
+  const { groups, projects, activeGroupId } = launchpadData;
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
+  const activeGroupProjects = useMemo(
+    () => projects.filter((project) => project.groupId === activeGroup.id),
+    [activeGroup.id, projects],
+  );
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  }, [projects]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(launchpadData));
+  }, [launchpadData]);
 
   const runningCount = Object.values(runtime).filter(
     (item) => item.status === "starting" || item.status === "running",
   ).length;
 
   const updateProject = (id: string, patch: Partial<LaunchpadProject>) => {
-    setProjects((prev) =>
-      prev.map((project) => (project.id === id ? { ...project, ...patch } : project)),
-    );
+    setLaunchpadData((prev) => ({
+      ...prev,
+      projects: prev.projects.map((project) => (project.id === id ? { ...project, ...patch } : project)),
+    }));
   };
 
   const addProject = () => {
-    setProjects((prev) => [...prev, createProject()]);
+    setLaunchpadData((prev) => ({
+      ...prev,
+      projects: [...prev.projects, createProject({ groupId: prev.activeGroupId }, prev.activeGroupId)],
+    }));
+  };
+
+  const addGroup = () => {
+    setLaunchpadData((prev) => {
+      const group = createGroup({ name: `分组 ${prev.groups.length + 1}` });
+      return {
+        ...prev,
+        groups: [...prev.groups, group],
+        activeGroupId: group.id,
+      };
+    });
+  };
+
+  const updateGroup = (id: string, patch: Partial<LaunchpadGroup>) => {
+    setLaunchpadData((prev) => ({
+      ...prev,
+      groups: prev.groups.map((group) => (group.id === id ? { ...group, ...patch } : group)),
+    }));
+  };
+
+  const selectGroup = (id: string) => {
+    setLaunchpadData((prev) => ({ ...prev, activeGroupId: id }));
   };
 
   const removeProject = (id: string) => {
-    setProjects((prev) => prev.filter((project) => project.id !== id));
+    setLaunchpadData((prev) => ({
+      ...prev,
+      projects: prev.projects.filter((project) => project.id !== id),
+    }));
     setRuntime((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -188,7 +299,7 @@ export default function LaunchpadPanel() {
             </div>
             <div className="flex items-center gap-3">
               <div className="rounded-full border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
-                {projects.length} 个项目 · {runningCount} 个运行中
+                {projects.length} 个项目 · {groups.length} 个分组 · {runningCount} 个运行中
               </div>
               <button
                 onClick={addProject}
@@ -196,6 +307,60 @@ export default function LaunchpadPanel() {
               >
                 新增项目
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-3 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
+          <div className="flex flex-wrap items-center gap-2">
+            {groups.map((group) => {
+              const isActiveGroup = group.id === activeGroup.id;
+              const groupProjects = projects.filter((project) => project.groupId === group.id);
+              const groupRunningCount = groupProjects.filter((project) => {
+                const state = runtime[project.id];
+                return state?.status === "starting" || state?.status === "running";
+              }).length;
+
+              return (
+                <button
+                  key={group.id}
+                  onClick={() => selectGroup(group.id)}
+                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                    isActiveGroup
+                      ? "border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] bg-[var(--bg-primary)]/80 text-[var(--text-secondary)] hover:border-[var(--accent-cyan)]/60 hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  <span className="h-2 w-2 rounded-full bg-[var(--accent-cyan)]" />
+                  <span className="text-xs font-medium">{group.name || DEFAULT_GROUP_NAME}</span>
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    {groupProjects.length} 项 · {groupRunningCount} 运行
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              onClick={addGroup}
+              className="rounded-xl border border-dashed border-[var(--border-color)] px-3 py-2 text-xs text-[var(--text-secondary)] transition hover:border-[var(--accent-cyan)] hover:text-[var(--accent-cyan)]"
+            >
+              + 新增分组
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-[var(--border-color)] pt-3">
+            <label className="min-w-[260px] flex-1">
+              <div className="mb-1.5 text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                Group Name
+              </div>
+              <input
+                value={activeGroup.name}
+                onChange={(event) => updateGroup(activeGroup.id, { name: event.target.value })}
+                className="w-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
+                placeholder="比如：worktree 主线 / worktree 功能分支"
+              />
+            </label>
+            <div className="rounded-full border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
+              当前分组：{activeGroupProjects.length} 个项目
             </div>
           </div>
         </div>
@@ -217,9 +382,26 @@ export default function LaunchpadPanel() {
               </button>
             </div>
           </div>
+        ) : activeGroupProjects.length === 0 ? (
+          <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-secondary)]/70 p-10 text-center">
+            <div className="max-w-md">
+              <div className="text-xl font-semibold text-[var(--text-primary)]">
+                这个分组还没有项目
+              </div>
+              <div className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+                可以把一个 worktree 当成一个分组，里面放这一套环境要启动的前端、后端和脚本服务。
+              </div>
+              <button
+                onClick={addProject}
+                className="mt-6 rounded-xl border border-[var(--accent-cyan)] px-4 py-2 text-sm font-medium text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10"
+              >
+                在当前分组新增项目
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-5">
-            {projects.map((project) => {
+            {activeGroupProjects.map((project) => {
               const state = runtime[project.id] ?? emptyRuntime();
               const isRunning = state.status === "starting" || state.status === "running";
               const canStart = project.workingDir.trim() !== "" && project.startCommand.trim() !== "";
@@ -282,6 +464,19 @@ export default function LaunchpadPanel() {
                       >
                         删除
                       </button>
+                      {groups.length > 1 && (
+                        <select
+                          value={project.groupId}
+                          onChange={(event) => updateProject(project.id, { groupId: event.target.value })}
+                          className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] outline-none transition hover:border-[var(--accent-cyan)] focus:border-[var(--accent-cyan)]"
+                        >
+                          {groups.map((group) => (
+                            <option key={group.id} value={group.id}>
+                              移到：{group.name || DEFAULT_GROUP_NAME}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                   </div>
 

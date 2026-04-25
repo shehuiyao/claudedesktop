@@ -113,7 +113,6 @@ cat > /tmp/latest.json << EOF
 }
 EOF
 ```
-
 ### 5. 创建 GitHub Release
 ```bash
 gh release create vX.Y.Z \

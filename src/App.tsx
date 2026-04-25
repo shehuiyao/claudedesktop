@@ -536,11 +536,11 @@ function App() {
               onPointerMove={handleContentPointerMove}
               onPointerUp={handleContentPointerUp}
             >
-              {showLaunchpad && (
-                <div className="absolute inset-0">
-                  <LaunchpadPanel />
-                </div>
-              )}
+              <div
+                className={`absolute inset-0 ${showLaunchpad ? "block" : "hidden"}`}
+              >
+                <LaunchpadPanel />
+              </div>
 
               {/* Mode picker - shown when tab is terminal mode but not yet activated */}
               {!showLaunchpad && tabs
