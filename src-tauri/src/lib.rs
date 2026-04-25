@@ -259,6 +259,24 @@ fn detect_running_launchpad_projects(
     Ok(matches)
 }
 
+#[tauri::command]
+fn stop_detected_launchpad_process(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    unsafe {
+        let pid = pid as i32;
+        if libc::kill(pid, libc::SIGTERM) != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Err("当前平台暂不支持关闭检测到的进程".to_string());
+    }
+
+    Ok(())
+}
+
 // ---- Chat mode commands ----
 
 #[tauri::command]
@@ -1537,6 +1555,7 @@ pub fn run() {
             resize_session,
             close_session,
             detect_running_launchpad_projects,
+            stop_detected_launchpad_process,
             check_claude_installed,
             list_directory,
             list_rule_files,

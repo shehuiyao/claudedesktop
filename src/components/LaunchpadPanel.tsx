@@ -382,6 +382,34 @@ export default function LaunchpadPanel() {
     }
   };
 
+  const handleStopDetectedProject = async (project: DetectedRunningProject) => {
+    const confirmed = window.confirm(
+      `确定关闭「${project.name}」吗？${project.port ? `\n端口：${project.port}` : ""}\nPID：${project.pid}`,
+    );
+    if (!confirmed) return;
+
+    try {
+      await invoke("stop_detected_launchpad_process", { pid: project.pid });
+      setDetectedProjects((prev) => prev.filter((item) => item.pid !== project.pid));
+      setRuntime((prev) => {
+        const stillDetected = detectedProjects.some(
+          (item) => item.project_id === project.project_id && item.pid !== project.pid,
+        );
+        const current = prev[project.project_id];
+        if (!current || current.status !== "detected" || stillDetected) return prev;
+        return {
+          ...prev,
+          [project.project_id]: {
+            ...current,
+            status: "idle",
+          },
+        };
+      });
+    } catch (error) {
+      setDetectError(String(error));
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(57,210,192,0.09),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(88,166,255,0.08),transparent_24%)]">
       <div className="mx-auto max-w-[1600px] px-6 py-6">
@@ -443,7 +471,13 @@ export default function LaunchpadPanel() {
                     <span className="font-medium text-[var(--text-primary)]">{project.name}</span>
                     {project.port && <span className="text-[var(--accent-green)]">端口 {project.port}</span>}
                     <span>PID {project.pid}</span>
-                    <span className="truncate text-[var(--text-muted)]">{project.command}</span>
+                    <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">{project.command}</span>
+                    <button
+                      onClick={() => handleStopDetectedProject(project)}
+                      className="rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
+                    >
+                      关闭
+                    </button>
                   </div>
                 ))}
               </div>
@@ -451,7 +485,7 @@ export default function LaunchpadPanel() {
           </div>
         )}
 
-        <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-3 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
+        <div className="sticky top-0 z-20 mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/90 p-3 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
           <div className="flex flex-wrap items-center gap-2">
             {groups.map((group) => {
               const isActiveGroup = group.id === activeGroup.id;
