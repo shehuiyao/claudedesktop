@@ -24,6 +24,7 @@ struct RunningLaunchpadProject {
     pid: u32,
     command: String,
     port: Option<String>,
+    ports: Vec<String>,
 }
 
 #[derive(Default)]
@@ -160,6 +161,10 @@ fn path_contains(parent: &str, child: &str) -> bool {
     !parent.is_empty() && (child == parent || child.starts_with(&format!("{}/", parent)))
 }
 
+fn paths_related(first: &str, second: &str) -> bool {
+    path_contains(first, second) || path_contains(second, first)
+}
+
 fn parse_port(address: &str) -> Option<String> {
     let last = address.rsplit(':').next()?.trim();
     if !last.is_empty() && last.chars().all(|item| item.is_ascii_digit()) {
@@ -239,7 +244,7 @@ fn detect_running_launchpad_projects(
             if project.working_dir.trim().is_empty() {
                 continue;
             }
-            if path_contains(&project.working_dir, cwd) {
+            if paths_related(&project.working_dir, cwd) {
                 matches.push(RunningLaunchpadProject {
                     project_id: project.id.clone(),
                     name: if project.name.trim().is_empty() {
@@ -251,6 +256,7 @@ fn detect_running_launchpad_projects(
                     pid: process.pid,
                     command: process.command.clone(),
                     port: process.ports.first().cloned(),
+                    ports: process.ports.clone(),
                 });
             }
         }

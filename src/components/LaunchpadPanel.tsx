@@ -38,6 +38,7 @@ interface DetectedRunningProject {
   pid: number;
   command: string;
   port?: string | null;
+  ports?: string[];
 }
 
 const STORAGE_KEY = "claude-desktop-launchpad-projects";
@@ -199,6 +200,22 @@ export default function LaunchpadPanel() {
   const activeGroupProjects = useMemo(
     () => projects.filter((project) => project.groupId === activeGroup.id),
     [activeGroup.id, projects],
+  );
+  const detectedProjectIds = useMemo(
+    () => new Set(detectedProjects.map((project) => project.project_id)),
+    [detectedProjects],
+  );
+  const launchpadRunningProjects = useMemo(
+    () =>
+      projects.filter((project) => {
+        const state = runtime[project.id];
+        return (
+          state &&
+          (state.status === "starting" || state.status === "running") &&
+          !detectedProjectIds.has(project.id)
+        );
+      }),
+    [detectedProjectIds, projects, runtime],
   );
 
   useEffect(() => {
@@ -441,11 +458,16 @@ export default function LaunchpadPanel() {
           </div>
         </div>
 
-        {(detectedProjects.length > 0 || detectError) && (
+        {(detectedProjects.length > 0 || launchpadRunningProjects.length > 0 || detectError) && (
           <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-4 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-[var(--text-primary)]">
                 系统运行检测
+                {!detectError && (
+                  <span className="ml-2 text-xs font-normal text-[var(--text-muted)]">
+                    {detectedProjects.length + launchpadRunningProjects.length} 项
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => {
@@ -463,17 +485,42 @@ export default function LaunchpadPanel() {
               </div>
             ) : (
               <div className="grid gap-2">
-                {detectedProjects.map((project) => (
+                {detectedProjects.map((project) => {
+                  const ports = project.ports?.length ? project.ports : project.port ? [project.port] : [];
+                  return (
+                    <div
+                      key={`${project.project_id}-${project.pid}-${ports.join("-") || "unknown"}`}
+                      className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
+                    >
+                      <span className="font-medium text-[var(--text-primary)]">{project.name}</span>
+                      {ports.length > 0 && (
+                        <span className="text-[var(--accent-green)]">端口 {ports.join("、")}</span>
+                      )}
+                      <span>PID {project.pid}</span>
+                      <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">{project.command}</span>
+                      <button
+                        onClick={() => handleStopDetectedProject(project)}
+                        className="rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
+                      >
+                        关闭
+                      </button>
+                    </div>
+                  );
+                })}
+                {launchpadRunningProjects.map((project) => (
                   <div
-                    key={`${project.project_id}-${project.pid}-${project.port ?? "unknown"}`}
+                    key={`launchpad-${project.id}`}
                     className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
                   >
-                    <span className="font-medium text-[var(--text-primary)]">{project.name}</span>
-                    {project.port && <span className="text-[var(--accent-green)]">端口 {project.port}</span>}
-                    <span>PID {project.pid}</span>
-                    <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">{project.command}</span>
+                    <span className="font-medium text-[var(--text-primary)]">
+                      {project.name || getProjectName(project.workingDir)}
+                    </span>
+                    <span className="text-[var(--accent-cyan)]">Launchpad 终端</span>
+                    <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">
+                      {project.startCommand}
+                    </span>
                     <button
-                      onClick={() => handleStopDetectedProject(project)}
+                      onClick={() => handleStop(project.id)}
                       className="rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
                     >
                       关闭
@@ -558,36 +605,45 @@ export default function LaunchpadPanel() {
               </button>
             </div>
           </div>
-        ) : activeGroupProjects.length === 0 ? (
-          <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-secondary)]/70 p-10 text-center">
-            <div className="max-w-md">
-              <div className="text-xl font-semibold text-[var(--text-primary)]">
-                这个分组还没有项目
-              </div>
-              <div className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
-                可以把一个 worktree 当成一个分组，里面放这一套环境要启动的前端、后端和脚本服务。
-              </div>
-              <button
-                onClick={addProject}
-                className="mt-6 rounded-xl border border-[var(--accent-cyan)] px-4 py-2 text-sm font-medium text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10"
-              >
-                在当前分组新增项目
-              </button>
-            </div>
-          </div>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-5">
-            {activeGroupProjects.map((project) => {
-              const state = runtime[project.id] ?? emptyRuntime();
-              const isRunning = state.status === "starting" || state.status === "running";
-              const isDetectedRunning = state.status === "detected";
-              const canStart = project.workingDir.trim() !== "" && project.startCommand.trim() !== "";
+          <>
+            {activeGroupProjects.length === 0 && (
+              <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-secondary)]/70 p-10 text-center">
+                <div className="max-w-md">
+                  <div className="text-xl font-semibold text-[var(--text-primary)]">
+                    这个分组还没有项目
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+                    可以把一个 worktree 当成一个分组，里面放这一套环境要启动的前端、后端和脚本服务。
+                  </div>
+                  <button
+                    onClick={addProject}
+                    className="mt-6 rounded-xl border border-[var(--accent-cyan)] px-4 py-2 text-sm font-medium text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10"
+                  >
+                    在当前分组新增项目
+                  </button>
+                </div>
+              </div>
+            )}
 
-              return (
-                <div
-                  key={project.id}
-                  className="flex min-h-[420px] flex-col rounded-2xl border border-[var(--border-color)] bg-[linear-gradient(180deg,rgba(22,27,34,0.96),rgba(13,17,23,0.98))] shadow-[0_16px_45px_var(--shadow-color)]"
-                >
+            <div
+              className={`grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-5 ${
+                activeGroupProjects.length === 0 ? "hidden" : ""
+              }`}
+            >
+              {projects.map((project) => {
+                const state = runtime[project.id] ?? emptyRuntime();
+                const isRunning = state.status === "starting" || state.status === "running";
+                const isDetectedRunning = state.status === "detected";
+                const canStart = project.workingDir.trim() !== "" && project.startCommand.trim() !== "";
+                const isVisibleProject = project.groupId === activeGroup.id;
+
+                return (
+                  <div
+                    key={project.id}
+                    className={`${isVisibleProject ? "flex" : "hidden"} min-h-[420px] flex-col rounded-2xl border border-[var(--border-color)] bg-[linear-gradient(180deg,rgba(22,27,34,0.96),rgba(13,17,23,0.98))] shadow-[0_16px_45px_var(--shadow-color)]`}
+                    aria-hidden={!isVisibleProject}
+                  >
                   <div className="border-b border-[var(--border-color)] px-4 py-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
@@ -713,7 +769,7 @@ export default function LaunchpadPanel() {
                           workingDir={project.workingDir}
                           startupCommand={project.startCommand}
                           sessionLabel={project.name || getProjectName(project.workingDir) || "Command"}
-                          isActive
+                          isActive={isVisibleProject}
                           onSessionStarted={() => {
                             setProjectRuntime(project.id, (current) => ({
                               ...current,
@@ -751,10 +807,11 @@ export default function LaunchpadPanel() {
                       </div>
                     )}
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
     </div>
