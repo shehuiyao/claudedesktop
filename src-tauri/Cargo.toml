@@ -1,6 +1,6 @@
 [package]
 name = "claude-desktop"
-version = "0.9.14"
+version = "0.9.15"
 description = "Claude Code Desktop GUI"
 authors = ["you"]
 edition = "2021"

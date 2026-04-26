@@ -195,6 +195,7 @@ export default function LaunchpadPanel() {
   const [detectedProjects, setDetectedProjects] = useState<DetectedRunningProject[]>([]);
   const [detectingProjects, setDetectingProjects] = useState(false);
   const [detectError, setDetectError] = useState("");
+  const [isDetectPanelCollapsed, setIsDetectPanelCollapsed] = useState(false);
   const { groups, projects, activeGroupId } = launchpadData;
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
   const activeGroupProjects = useMemo(
@@ -358,6 +359,7 @@ export default function LaunchpadPanel() {
   const handleDetectRunningProjects = async () => {
     setDetectingProjects(true);
     setDetectError("");
+    setIsDetectPanelCollapsed(false);
     try {
       const result = await invoke<DetectedRunningProject[]>("detect_running_launchpad_projects", {
         projects: projects.map((project) => ({
@@ -458,7 +460,7 @@ export default function LaunchpadPanel() {
           </div>
         </div>
 
-        {(detectedProjects.length > 0 || launchpadRunningProjects.length > 0 || detectError) && (
+        {!isDetectPanelCollapsed && (detectedProjects.length > 0 || launchpadRunningProjects.length > 0 || detectError) && (
           <div className="mb-5 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/78 p-4 shadow-[0_12px_36px_var(--shadow-color)] backdrop-blur">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-[var(--text-primary)]">
@@ -473,6 +475,7 @@ export default function LaunchpadPanel() {
                 onClick={() => {
                   setDetectedProjects([]);
                   setDetectError("");
+                  setIsDetectPanelCollapsed(true);
                 }}
                 className="rounded-xl border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
               >
@@ -490,17 +493,24 @@ export default function LaunchpadPanel() {
                   return (
                     <div
                       key={`${project.project_id}-${project.pid}-${ports.join("-") || "unknown"}`}
-                      className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
+                      className="flex min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
                     >
-                      <span className="font-medium text-[var(--text-primary)]">{project.name}</span>
+                      <span className="max-w-[180px] shrink-0 truncate font-medium text-[var(--text-primary)]">
+                        {project.name}
+                      </span>
                       {ports.length > 0 && (
-                        <span className="text-[var(--accent-green)]">端口 {ports.join("、")}</span>
+                        <span className="shrink-0 text-[var(--accent-green)]">端口 {ports.join("、")}</span>
                       )}
-                      <span>PID {project.pid}</span>
-                      <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">{project.command}</span>
+                      <span className="shrink-0">PID {project.pid}</span>
+                      <span
+                        className="min-w-0 flex-1 truncate text-[var(--text-muted)]"
+                        title={project.command}
+                      >
+                        {project.command}
+                      </span>
                       <button
                         onClick={() => handleStopDetectedProject(project)}
-                        className="rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
+                        className="shrink-0 rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
                       >
                         关闭
                       </button>
@@ -510,18 +520,21 @@ export default function LaunchpadPanel() {
                 {launchpadRunningProjects.map((project) => (
                   <div
                     key={`launchpad-${project.id}`}
-                    className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
+                    className="flex min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)]"
                   >
-                    <span className="font-medium text-[var(--text-primary)]">
+                    <span className="max-w-[180px] shrink-0 truncate font-medium text-[var(--text-primary)]">
                       {project.name || getProjectName(project.workingDir)}
                     </span>
-                    <span className="text-[var(--accent-cyan)]">Launchpad 终端</span>
-                    <span className="min-w-0 flex-1 truncate text-[var(--text-muted)]">
+                    <span className="shrink-0 text-[var(--accent-cyan)]">Launchpad 终端</span>
+                    <span
+                      className="min-w-0 flex-1 truncate text-[var(--text-muted)]"
+                      title={project.startCommand}
+                    >
                       {project.startCommand}
                     </span>
                     <button
                       onClick={() => handleStop(project.id)}
-                      className="rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
+                      className="shrink-0 rounded-lg border border-[var(--accent-red)]/35 px-2.5 py-1 text-xs text-[var(--accent-red)] transition hover:bg-[var(--accent-red)]/10 hover:text-[var(--text-primary)]"
                     >
                       关闭
                     </button>
