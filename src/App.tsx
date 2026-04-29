@@ -12,7 +12,7 @@ import BranchSwitcher from "./components/BranchSwitcher";
 import CommitHistory from "./components/CommitHistory";
 import BugTrackerPanel from "./components/BugTrackerPanel";
 import QuickActionsPanel from "./components/QuickActionsPanel";
-import TabBar, { type Tab, type CliTool } from "./components/TabBar";
+import TabBar, { type Tab, type CliTool, type CodexPermissionMode } from "./components/TabBar";
 import SplitDivider from "./components/SplitDivider";
 import LaunchpadPanel from "./components/LaunchpadPanel";
 import CodexUsagePanel from "./components/CodexUsagePanel";
@@ -21,6 +21,41 @@ interface GitInfo {
   branch: string;
   additions: number;
   deletions: number;
+}
+
+type CodexTool = Extract<CliTool, "codex" | "codex_sub">;
+
+const CODEX_PERMISSION_KEY = "claude-desktop-codex-permission-modes";
+const DEFAULT_CODEX_PERMISSION_MODES: Record<CodexTool, CodexPermissionMode> = {
+  codex_sub: "full_access",
+  codex: "full_access",
+};
+
+const CODEX_PERMISSION_OPTIONS: { value: CodexPermissionMode; label: string }[] = [
+  { value: "default", label: "默认权限" },
+  { value: "auto_review", label: "自动审查" },
+  { value: "full_access", label: "完全访问权限" },
+];
+
+function loadCodexPermissionModes(): Record<CodexTool, CodexPermissionMode> {
+  try {
+    const raw = localStorage.getItem(CODEX_PERMISSION_KEY);
+    if (!raw) return DEFAULT_CODEX_PERMISSION_MODES;
+    const parsed = JSON.parse(raw) as Partial<Record<CodexTool, CodexPermissionMode>>;
+    return {
+      codex_sub: parsed.codex_sub ?? DEFAULT_CODEX_PERMISSION_MODES.codex_sub,
+      codex: parsed.codex ?? DEFAULT_CODEX_PERMISSION_MODES.codex,
+    };
+  } catch {
+    return DEFAULT_CODEX_PERMISSION_MODES;
+  }
+}
+
+function normalizeCliTool(tool: string | null | undefined): CliTool {
+  if (tool === "gemini" || tool === "codex" || tool === "codex_sub" || tool === "volc") {
+    return tool;
+  }
+  return "claude";
 }
 
 function App() {
@@ -41,6 +76,8 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showLaunchpad, setShowLaunchpad] = useState(true);
   const [showCodexUsage, setShowCodexUsage] = useState(false);
+  const [moreModePickerTabId, setMoreModePickerTabId] = useState<string | null>(null);
+  const [codexPermissionModes, setCodexPermissionModes] = useState<Record<CodexTool, CodexPermissionMode>>(loadCodexPermissionModes);
   // Track tabs that have had terminal mode activated (for lazy mounting)
   const [terminalActivated, setTerminalActivated] = useState<Set<string>>(new Set());
   // Map sessionId -> tabId for correlating pty events to tabs
@@ -52,6 +89,10 @@ function App() {
   const activatedTabsRef = useRef<Set<string>>(new Set());
   // Track which tabs are in waiting state
   const waitingTabsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    localStorage.setItem(CODEX_PERMISSION_KEY, JSON.stringify(codexPermissionModes));
+  }, [codexPermissionModes]);
 
   // 分屏状态
   const [splitTabId, setSplitTabId] = useState<string | null>(null);
@@ -137,11 +178,24 @@ function App() {
     });
   }, []);
 
-  const handleStartTerminal = useCallback((tabId: string, yolo: boolean, tool: CliTool = "claude") => {
+  const handleStartTerminal = useCallback((tabId: string, yolo: boolean, tool: CliTool = "claude", permissionMode?: CodexPermissionMode) => {
+    setMoreModePickerTabId(null);
     setTerminalActivated((prev) => new Set(prev).add(tabId));
     setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo, tool, status: "running" as const } : t))
+      prev.map((t) => (t.id === tabId ? { ...t, mode: "terminal" as const, yolo, tool, permissionMode, status: "running" as const } : t))
     );
+  }, []);
+
+  const handleStartCodexTerminal = useCallback(
+    (tabId: string, tool: CodexTool) => {
+      const permissionMode = codexPermissionModes[tool];
+      handleStartTerminal(tabId, permissionMode === "full_access", tool, permissionMode);
+    },
+    [codexPermissionModes, handleStartTerminal],
+  );
+
+  const handleCodexPermissionChange = useCallback((tool: CodexTool, permissionMode: CodexPermissionMode) => {
+    setCodexPermissionModes((prev) => ({ ...prev, [tool]: permissionMode }));
   }, []);
 
   const handleReorderTabs = useCallback((reordered: Tab[]) => {
@@ -284,12 +338,26 @@ function App() {
   }, []);
 
   // 从历史记录恢复对话：创建新终端 tab 并带上 --resume 参数
-  const handleResumeSession = useCallback((projectPath: string, sessionId: string) => {
+  const handleResumeSession = useCallback((projectPath: string, sessionId: string, tool?: string | null) => {
     const tabId = `tab-${Date.now()}`;
     const dirName = projectPath.split("/").pop() || projectPath;
+    const cliTool = normalizeCliTool(tool);
+    const permissionMode = cliTool === "codex" || cliTool === "codex_sub"
+      ? codexPermissionModes[cliTool]
+      : undefined;
     setTabs((prev) => [
       ...prev,
-      { id: tabId, label: `${dirName} (resumed)`, workingDir: projectPath, mode: "terminal", yolo: false, resumeSessionId: sessionId, status: "running" },
+      {
+        id: tabId,
+        label: `${dirName} (resumed)`,
+        workingDir: projectPath,
+        mode: "terminal",
+        yolo: permissionMode === "full_access",
+        tool: cliTool,
+        permissionMode,
+        resumeSessionId: sessionId,
+        status: "running",
+      },
     ]);
     setTerminalActivated((prev) => new Set(prev).add(tabId));
     setActiveTabId(tabId);
@@ -298,11 +366,11 @@ function App() {
     setActiveProject(null);
     setShowLaunchpad(false);
     setShowCodexUsage(false);
-  }, []);
+  }, [codexPermissionModes]);
 
   // 创建 git worktree 并打开为新 tab
   const handleCreateWorktree = useCallback(async (branch: string) => {
-    if (!workingDir) return;
+    if (!workingDir) throw new Error("当前没有打开项目目录");
     try {
       const result = await invoke<{ path: string; branch: string }>("create_worktree", { path: workingDir, branch });
       const tabId = `tab-${Date.now()}`;
@@ -319,6 +387,7 @@ function App() {
       setShowCodexUsage(false);
     } catch (e) {
       console.error("Failed to create worktree:", e);
+      throw e;
     }
   }, [workingDir]);
 
@@ -575,64 +644,125 @@ function App() {
                       <div className="text-sm mb-1 text-[var(--text-primary)] font-medium">
                         {tab.label}
                       </div>
-                      <div className="text-[10px] mb-6 text-[var(--text-muted)] truncate">
-                        {tab.workingDir}
-                      </div>
+                      {gitInfo && workingDir === tab.workingDir ? (
+                        <BranchSwitcher
+                          gitInfo={gitInfo}
+                          workingDir={tab.workingDir}
+                          onBranchSwitched={refreshGitInfo}
+                          onCreateWorktree={handleCreateWorktree}
+                          variant="mode-picker"
+                          pathLabel={tab.workingDir}
+                          className="mb-6"
+                        />
+                      ) : (
+                        <div className="text-[10px] mb-6 text-[var(--text-muted)] truncate">
+                          {tab.workingDir}
+                        </div>
+                      )}
                       <div className="flex gap-3 justify-center flex-wrap">
+                        <div className="flex-1 max-w-[180px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] transition-all duration-150 group overflow-hidden">
+                          <button
+                            onClick={() => handleStartCodexTerminal(tab.id, "codex_sub")}
+                            className="w-full py-3 px-4 cursor-pointer"
+                          >
+                            <div className="text-sm font-medium text-[#10a37f] mb-1">Codex 订阅</div>
+                            <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                              使用隔离目录启动，不影响默认 API
+                            </div>
+                          </button>
+                          <div className="px-3 pb-3">
+                            <div className="relative">
+                              <select
+                                value={codexPermissionModes.codex_sub}
+                                onChange={(event) => handleCodexPermissionChange("codex_sub", event.target.value as CodexPermissionMode)}
+                                className="appearance-none w-full h-8 rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-2 pr-7 text-[10px] text-[var(--text-secondary)] outline-none cursor-pointer hover:text-[var(--text-primary)]"
+                              >
+                                {CODEX_PERMISSION_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[var(--text-muted)]">▼</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex-1 max-w-[180px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] transition-all duration-150 group overflow-hidden">
+                          <button
+                            onClick={() => handleStartCodexTerminal(tab.id, "codex")}
+                            className="w-full py-3 px-4 cursor-pointer"
+                          >
+                            <div className="text-sm font-medium text-[#10a37f] mb-1">本地配置 Codex</div>
+                            <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                              使用本机默认 Codex 配置
+                            </div>
+                          </button>
+                          <div className="px-3 pb-3">
+                            <div className="relative">
+                              <select
+                                value={codexPermissionModes.codex}
+                                onChange={(event) => handleCodexPermissionChange("codex", event.target.value as CodexPermissionMode)}
+                                className="appearance-none w-full h-8 rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-2 pr-7 text-[10px] text-[var(--text-secondary)] outline-none cursor-pointer hover:text-[var(--text-primary)]"
+                              >
+                                {CODEX_PERMISSION_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[var(--text-muted)]">▼</span>
+                            </div>
+                          </div>
+                        </div>
                         <button
-                          onClick={() => handleStartTerminal(tab.id, false)}
+                          onClick={() => setMoreModePickerTabId((current) => current === tab.id ? null : tab.id)}
                           className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
                         >
-                          <div className="text-sm font-medium text-[var(--accent-cyan)] mb-1">Normal</div>
+                          <div className="text-sm font-medium text-[var(--accent-cyan)] mb-1">更多</div>
                           <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            Need permission for each action
+                            其他启动方式
                           </div>
                         </button>
-                        <button
-                          onClick={() => handleStartTerminal(tab.id, true)}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-orange)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
-                        >
-                          <div className="text-sm font-medium text-[var(--accent-orange)] mb-1">YOLO</div>
-                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            Skip all permission prompts
+                        {moreModePickerTabId === tab.id && (
+                          <div className="w-full mt-1 pt-3 border-t border-[var(--border-subtle)] flex gap-3 justify-center flex-wrap">
+                            <button
+                              onClick={() => handleStartTerminal(tab.id, false)}
+                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                            >
+                              <div className="text-sm font-medium text-[var(--accent-cyan)] mb-1">Normal</div>
+                              <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                                Need permission for each action
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => handleStartTerminal(tab.id, true)}
+                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-orange)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                            >
+                              <div className="text-sm font-medium text-[var(--accent-orange)] mb-1">YOLO</div>
+                              <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                                Skip all permission prompts
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => handleStartTerminal(tab.id, false, "gemini")}
+                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#4285F4] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                            >
+                              <div className="text-sm font-medium text-[#4285F4] mb-1">Gemini</div>
+                              <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                                Google Gemini CLI
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => handleStartTerminal(tab.id, false, "volc")}
+                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#FF6B35] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                            >
+                              <div className="text-sm font-medium text-[#FF6B35] mb-1">火山</div>
+                              <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
+                                火山 CodingPlan
+                              </div>
+                            </button>
                           </div>
-                        </button>
-                        <button
-                          onClick={() => handleStartTerminal(tab.id, false, "gemini")}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#4285F4] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
-                        >
-                          <div className="text-sm font-medium text-[#4285F4] mb-1">Gemini</div>
-                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            Google Gemini CLI
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => handleStartTerminal(tab.id, false, "codex")}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
-                        >
-                          <div className="text-sm font-medium text-[#10a37f] mb-1">Codex</div>
-                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            OpenAI Codex CLI
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => handleStartTerminal(tab.id, false, "codex_sub")}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
-                        >
-                          <div className="text-sm font-medium text-[#10a37f] mb-1">Codex 订阅</div>
-                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            使用隔离目录启动，不影响默认 API
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => handleStartTerminal(tab.id, false, "volc")}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#FF6B35] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
-                        >
-                          <div className="text-sm font-medium text-[#FF6B35] mb-1">🌋 火山</div>
-                          <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
-                            火山 CodingPlan
-                          </div>
-                        </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -673,6 +803,7 @@ function App() {
                           workingDir={tab.workingDir}
                           yolo={tab.yolo}
                           tool={tab.tool}
+                          permissionMode={tab.permissionMode}
                           resumeSessionId={tab.resumeSessionId}
                           isActive={isWorkspaceVisible && isActive}
                           onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}

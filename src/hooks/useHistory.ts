@@ -14,6 +14,8 @@ export interface GroupedHistory {
   entries: HistoryEntry[];
 }
 
+const HISTORY_VISIBLE_MONTHS = 1;
+
 /** Parse a timestamp that may be an epoch-ms number string or an ISO date string. */
 function parseTimestamp(ts: string): number {
   const num = Number(ts);
@@ -24,8 +26,28 @@ function parseTimestamp(ts: string): number {
 
 /** Extract a short project name from a full path like "/Users/foo/my-project" → "my-project" */
 function projectLabel(project: string): string {
-  const parts = project.replace(/\/+$/, "").split("/");
+  const normalized = project.replace(/\/+$/, "");
+  const worktreeMatch = normalized.match(/\/\.codex\/worktrees\/([^/]+)\/([^/]+)$/);
+  if (worktreeMatch) {
+    return `${worktreeMatch[2]} · worktree/${worktreeMatch[1]}`;
+  }
+
+  const parts = normalized.split("/");
   return parts[parts.length - 1] || project;
+}
+
+function oneMonthAgo(): number {
+  const date = new Date();
+  date.setMonth(date.getMonth() - HISTORY_VISIBLE_MONTHS);
+  return date.getTime();
+}
+
+function filterRecentEntries(entries: HistoryEntry[]): HistoryEntry[] {
+  const cutoff = oneMonthAgo();
+  return entries.filter((entry) => {
+    if (!entry.timestamp) return false;
+    return parseTimestamp(entry.timestamp) >= cutoff;
+  });
 }
 
 function groupByProject(entries: HistoryEntry[]): GroupedHistory[] {
@@ -62,7 +84,7 @@ export function useHistory() {
     setError(null);
     try {
       const entries = await invoke<HistoryEntry[]>("get_history");
-      setHistory(groupByProject(entries));
+      setHistory(groupByProject(filterRecentEntries(entries)));
     } catch (err) {
       setError(String(err));
     } finally {

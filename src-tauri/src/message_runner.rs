@@ -273,6 +273,7 @@ impl PtySession {
         working_dir: String,
         session_id: String,
         yolo: bool,
+        permission_mode: Option<String>,
         tool: String,
         resume_session_id: Option<String>,
         startup_command: Option<String>,
@@ -344,7 +345,19 @@ impl PtySession {
         } else {
             let tool_path = resolve_tool_path(&tool)?;
             let mut args = Vec::new();
-            if tool != "gemini" && tool != "codex" && tool != "codex_sub" {
+            if tool == "codex" || tool == "codex_sub" {
+                match permission_mode.as_deref() {
+                    Some("auto_review") => args.push("--full-auto".to_string()),
+                    Some("full_access") => {
+                        args.push("--dangerously-bypass-approvals-and-sandbox".to_string())
+                    }
+                    _ => {}
+                }
+                if let Some(ref sid) = resume_session_id {
+                    args.push("resume".to_string());
+                    args.push(sid.clone());
+                }
+            } else if tool != "gemini" {
                 // claude / volc 模式：支持 yolo 和 resume
                 if yolo {
                     args.push("--dangerously-skip-permissions".to_string());

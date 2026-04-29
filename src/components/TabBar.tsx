@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
 export type CliTool = "claude" | "gemini" | "codex" | "codex_sub" | "volc";
+export type CodexPermissionMode = "default" | "auto_review" | "full_access";
 
 export interface Tab {
   id: string;
@@ -9,6 +10,7 @@ export interface Tab {
   mode: "chat" | "terminal";
   yolo?: boolean;
   tool?: CliTool;
+  permissionMode?: CodexPermissionMode;
   resumeSessionId?: string;
   isWorktree?: boolean;
   worktreeParentDir?: string;

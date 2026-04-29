@@ -6,12 +6,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
-import type { CliTool } from "./TabBar";
+import type { CliTool, CodexPermissionMode } from "./TabBar";
 
 interface LiveTerminalProps {
   workingDir: string;
   yolo?: boolean;
   tool?: CliTool;
+  permissionMode?: CodexPermissionMode;
   resumeSessionId?: string;
   startupCommand?: string;
   sessionLabel?: string;
@@ -74,6 +75,7 @@ export default function LiveTerminal({
   workingDir,
   yolo,
   tool,
+  permissionMode,
   resumeSessionId,
   startupCommand,
   sessionLabel,
@@ -305,6 +307,7 @@ export default function LiveTerminal({
         const id = await invoke<string>("start_session", {
           workingDir,
           yolo: yolo ?? false,
+          permissionMode: permissionMode ?? null,
           tool: tool ?? "claude",
           resumeSessionId: resumeSessionId ?? null,
           startupCommand: startupCommand ?? null,
@@ -443,7 +446,7 @@ export default function LiveTerminal({
       term?.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- onSessionStarted is tracked via ref
-  }, [workingDir, yolo, tool, resumeSessionId, startupCommand]);
+  }, [workingDir, yolo, tool, permissionMode, resumeSessionId, startupCommand]);
 
   if (error) {
     return (

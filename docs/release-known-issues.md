@@ -9,20 +9,50 @@
 
 ## 产物命名
 
-- 自动更新包真实文件名是 `Claude Desktop.app.tar.gz`，中间是空格。
-- 不要把 URL 或文件名写成 `Claude.Desktop.app.tar.gz`。这个点会导致 `latest.json` 指向不存在的资源，用户侧自动更新会失败。
-- 生成 `latest.json` 前必须先读取 `src-tauri/target/release/bundle/` 下的真实 `.app.tar.gz` 和 `.sig` 文件。
+- Tauri 构建出来的自动更新包真实文件名是 `Claude Desktop.app.tar.gz`，中间是空格。
+- 生成 `latest.json` 前必须先读取 `src-tauri/target/release/bundle/` 下的真实 `.app.tar.gz` 和 `.sig` 文件，签名必须来自真实 `.sig`。
+- GitHub Release 资产名可以按历史稳定格式改成无空格版本，例如把构建产物复制为 `/tmp/Claude.Desktop.app.tar.gz` 后上传。
+- `latest.json` 里的 URL 必须和最终上传到 GitHub Release 的资产名一致。上传的是 `Claude.Desktop.app.tar.gz`，URL 就写 `https://github.com/shehuiyao/claudedesktop/releases/download/vX.Y.Z/Claude.Desktop.app.tar.gz`；上传的是带空格文件名，URL 才需要写 `Claude%20Desktop.app.tar.gz`。
+- 不要只靠模板猜文件名。文件名像设计稿里的导出切片名，实际上传什么，自动更新入口就必须指向什么。
 
 ## Release 上传文件
 
 - GitHub Release 必须同时上传 DMG、`.app.tar.gz` 更新包、`latest.json`。
 - DMG 方便用户手动安装，`.app.tar.gz` 和 `latest.json` 是 Tauri 自动更新需要的文件。
+- Release 使用的是本机 `gh` 登录态，不使用 `~/.claude-desktop/.github_token`。后者只是应用内反馈创建 GitHub Issue 的 token。
+- 遇到上传问题时先跑 `gh auth status`。如果显示 keyring 登录且 token scope 包含 `repo`，说明基础权限通常够用。
+- 如果 `gh release create` 或 `gh release upload` 上传大文件时长时间无输出，先用 `gh release view vX.Y.Z --json assets,isDraft` 查 Release 状态，不要重复创建。
+- 如果只看到 `latest.json` 上传成功，而 DMG / `.app.tar.gz` 一直不出现，优先判断为 `gh` 上传链路卡住。可以改用 GitHub 上传 API 直传：
+  ```bash
+  env -u http_proxy -u https_proxy -u all_proxy curl --noproxy '*' \
+    --fail-with-body -L --max-time 180 -X POST \
+    -H "Authorization: Bearer $(gh auth token)" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/gzip" \
+    --data-binary @/tmp/Claude.Desktop.app.tar.gz \
+    "https://uploads.github.com/repos/shehuiyao/claudedesktop/releases/<release_id>/assets?name=Claude.Desktop.app.tar.gz"
+  ```
+- DMG 同理把 `Content-Type` 改成 `application/x-apple-diskimage`，文件路径和 `name` 改成 DMG 文件名。
+- 直传成功后，再用 `gh release edit vX.Y.Z --draft=false` 发布草稿。
+- 如果 Release 还是草稿，资产下载 URL 可能暂时显示 `untagged-...`。发布为正式版后，URL 会变成 `/releases/download/vX.Y.Z/...`，需要再查一次确认。
 
 ## 构建环境
 
 - 在 Codex 沙箱内运行 `npm run tauri build` 时，前端和 Rust release 编译可以成功，但 DMG 阶段可能在 `bundle_dmg.sh` 失败。
 - 这个问题通常是 macOS `hdiutil` 打包 DMG 需要挂载/卸载磁盘镜像，沙箱权限不够。
 - 遇到这种情况，用同一条带签名环境变量的构建命令申请沙箱外执行；成功后继续检查 DMG、`.app.tar.gz`、`.sig` 三个真实产物。
+- 本机可能配置 `http_proxy` / `https_proxy` / `all_proxy` 指向 `127.0.0.1:7897`。沙箱内访问这个代理可能被拦，表现为 `operation not permitted`、`curl` exit code 6/7，或 `gh` 请求卡住。
+- 小文件 `latest.json` 能上传，不代表 DMG / `.app.tar.gz` 大文件也会顺利。大文件卡住时，优先用上面的 `curl --data-binary` 直传方式确认。
+- 如果 `curl` 验证 `latest.json` 失败，先区分是链接问题还是当前网络问题；沙箱内默认代理可能失败，可以用沙箱外直连验证：
+  ```bash
+  env -u http_proxy -u https_proxy -u all_proxy curl --noproxy '*' -sL \
+    https://github.com/shehuiyao/claudedesktop/releases/latest/download/latest.json
+  ```
+- 如果沙箱内验证慢，不代表发版失败。先以 `gh release view vX.Y.Z --json assets,isDraft` 为准确认 Release 状态，再单独验证 `latest.json`。
+- 左下角自动更新下载慢时，不要只看 Release 包大小。Tauri updater 是 Rust 层下载器，系统代理打开不一定等于它会自动走代理；表现可能是浏览器或 `curl -x http://127.0.0.1:7897` 几秒能下载完，但 App 内仍然很慢。
+- `@tauri-apps/plugin-updater` 的 `check()` 支持传入 `proxy` 参数，这个代理会继续绑定到后续 `downloadAndInstall()` 使用。左下角更新应优先读取系统 HTTP/HTTPS 代理并显式传入；没有系统代理或代理失败时，再回退到 updater 默认通道。macOS 上先读 `scutil --proxy`，如果返回空，再用 `networksetup` 读取各网络服务代理。`http://127.0.0.1:7897` 只是本次排查示例，不要写死成唯一代理。
+- 2026-04-29 排查记录：`v0.9.17` 更新包约 `9.6MB`，直连 GitHub Release CDN 时 60 秒只下载约 `0.89MB`；强制 `curl -x http://127.0.0.1:7897` 后约 `6.43s` 下载完成。这个现象说明慢点在下载链路，不是包体突然变大，也不是 `latest.json` 或 Release 资产缺失。
+- 如果用户反馈“之前几秒就下好了，现在左下角很慢”，优先确认当前已安装 App 是否已经包含显式 updater proxy 逻辑；源码改完不等于已安装版本生效，需要重新构建或发小版本。
 
 ## 后续同步规则
 

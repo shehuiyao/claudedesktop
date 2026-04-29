@@ -1,18 +1,28 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { check, type CheckOptions, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "done" | "error";
+type UpdateNetwork = "system-proxy" | "default";
+type SystemProxyConfig = {
+  url: string;
+  source: string;
+};
 
 const APP_VERSION = "0.9.17";
+const UPDATE_CHECK_TIMEOUT = 15000;
+const UPDATE_DOWNLOAD_TIMEOUT = 10 * 60 * 1000;
 
 export default function StatusBar() {
   const { mode, setMode } = useTheme();
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [latestVersion, setLatestVersion] = useState("");
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadedSize, setDownloadedSize] = useState(0);
+  const [totalSize, setTotalSize] = useState(0);
+  const [updateNetwork, setUpdateNetwork] = useState<UpdateNetwork>("default");
   const [errorMsg, setErrorMsg] = useState("");
   const updateRef = useRef<Update | null>(null);
   const checkCancelledRef = useRef(false);
@@ -41,6 +51,28 @@ export default function StatusBar() {
 
   const themeLabel = mode === "dark" ? "\u25CF Dark" : mode === "light" ? "\u25CB Light" : "\u25D0 Auto";
 
+  const formatSize = (bytes: number) => {
+    if (bytes <= 0) return "0 MB";
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  const checkWithOptions = async (options: CheckOptions, network: UpdateNetwork) => {
+    const update = await check(options);
+    if (!checkCancelledRef.current) {
+      setUpdateNetwork(network);
+    }
+    return update;
+  };
+
+  const getSystemProxy = async () => {
+    try {
+      return await invoke<SystemProxyConfig | null>("get_system_proxy");
+    } catch (e) {
+      console.warn("Read system proxy failed, using updater defaults:", e);
+      return null;
+    }
+  };
+
   const handleCancelCheck = useCallback(() => {
     checkCancelledRef.current = true;
     setUpdateStatus("idle");
@@ -50,9 +82,24 @@ export default function StatusBar() {
     if (updateStatus === "checking" || updateStatus === "downloading") return;
     checkCancelledRef.current = false;
     setUpdateStatus("checking");
+    setErrorMsg("");
     try {
-      // 不设前端超时，由用户手动 Cancel；网络慢时给足时间
-      const update = await check();
+      let update: Update | null = null;
+      const systemProxy = await getSystemProxy();
+      if (systemProxy?.url) {
+        try {
+          update = await checkWithOptions(
+            { proxy: systemProxy.url, timeout: UPDATE_CHECK_TIMEOUT },
+            "system-proxy",
+          );
+        } catch (proxyError) {
+          console.warn("System proxy update check failed, falling back to updater defaults:", proxyError);
+          update = await checkWithOptions({ timeout: UPDATE_CHECK_TIMEOUT }, "default");
+        }
+      } else {
+        update = await checkWithOptions({ timeout: UPDATE_CHECK_TIMEOUT }, "default");
+      }
+
       if (checkCancelledRef.current) return;
       if (update) {
         updateRef.current = update;
@@ -78,20 +125,24 @@ export default function StatusBar() {
     try {
       setUpdateStatus("downloading");
       setDownloadProgress(0);
-      let totalSize = 0;
+      setDownloadedSize(0);
+      setTotalSize(0);
+      let nextTotalSize = 0;
       let downloaded = 0;
       await update.downloadAndInstall((event) => {
         if (event.event === "Started") {
-          totalSize = event.data.contentLength ?? 0;
+          nextTotalSize = event.data.contentLength ?? 0;
+          setTotalSize(nextTotalSize);
         } else if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          if (totalSize > 0) {
-            setDownloadProgress(Math.round((downloaded / totalSize) * 100));
+          setDownloadedSize(downloaded);
+          if (nextTotalSize > 0) {
+            setDownloadProgress(Math.round((downloaded / nextTotalSize) * 100));
           }
         } else if (event.event === "Finished") {
           setDownloadProgress(100);
         }
-      });
+      }, { timeout: UPDATE_DOWNLOAD_TIMEOUT });
       setUpdateStatus("done");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -124,7 +175,7 @@ export default function StatusBar() {
       case "update-available":
         return (
           <span className="text-[var(--accent-orange)]">
-            v{latestVersion} available{" · "}
+            v{latestVersion} available{updateNetwork === "system-proxy" ? " via system proxy" : ""}{" · "}
             <button
               onClick={handleDownloadAndInstall}
               className="underline hover:text-[var(--text-primary)] cursor-pointer bg-transparent border-none p-0 text-[10px] text-[var(--accent-orange)]"
@@ -137,6 +188,13 @@ export default function StatusBar() {
         return (
           <span className="text-[var(--accent-cyan)] animate-pulse">
             Downloading {downloadProgress > 0 ? `${downloadProgress}%` : "..."}
+            {downloadedSize > 0 && (
+              <>
+                {" "}
+                ({formatSize(downloadedSize)}
+                {totalSize > 0 ? `/${formatSize(totalSize)}` : ""})
+              </>
+            )}
           </span>
         );
       case "done":

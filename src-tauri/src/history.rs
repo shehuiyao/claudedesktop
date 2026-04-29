@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Deserialize a timestamp that may be a JSON number (epoch ms) or a string.
 /// Always produces a string suitable for JavaScript's `new Date()`.
@@ -65,6 +65,15 @@ fn codex_dir() -> Option<PathBuf> {
 
 fn codex_sub_dir() -> PathBuf {
     PathBuf::from("/tmp/codex-subscription-home/.codex")
+}
+
+fn codex_roots() -> Vec<(PathBuf, String)> {
+    let mut roots = Vec::new();
+    if let Some(d) = codex_dir() {
+        roots.push((d, "codex".to_string()));
+    }
+    roots.push((codex_sub_dir(), "codex_sub".to_string()));
+    roots
 }
 
 /// Convert a project path like `/Users/foo/bar` to its slug `-Users-foo-bar`.
@@ -192,6 +201,10 @@ fn walk_jsonl_files(dir: &PathBuf) -> Vec<PathBuf> {
     results
 }
 
+fn codex_session_dirs(root: &Path) -> Vec<PathBuf> {
+    vec![root.join("sessions"), root.join("archived_sessions")]
+}
+
 /// Extract the Codex session UUID from a filename like
 /// `rollout-2026-03-01T20-00-26-019ca945-719b-73a2-b408-a8f560398a74`.
 /// The UUID is the last 5 hyphen-separated segments.
@@ -210,57 +223,188 @@ fn extract_session_id_from_filename(stem: &str) -> Option<String> {
     }
 }
 
-/// Read the cwd from the first `session_meta` line in a Codex session file.
-fn read_codex_session_cwd(path: &PathBuf) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
+#[derive(Debug, Clone)]
+struct CodexPromptInfo {
+    text: String,
+    timestamp: Option<String>,
+}
+
+fn timestamp_from_epoch_seconds(ts: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
+}
+
+fn shorten_display(text: &str) -> Option<String> {
+    let cleaned = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .chars()
+        .take(80)
+        .collect::<String>();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn extract_text_from_codex_content(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(items) => {
+            let mut parts = Vec::new();
+            for item in items {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    parts.push(text.to_string());
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_bootstrap_prompt(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("# AGENTS.md instructions") || trimmed.starts_with("<environment_context>")
+}
+
+fn read_codex_history_prompts(root: &Path) -> HashMap<String, CodexPromptInfo> {
+    let path = root.join("history.jsonl");
+    let mut prompts = HashMap::new();
+    let Ok(file) = fs::File::open(&path) else {
+        return prompts;
+    };
     let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line.ok()?;
+
+    for line in reader.lines().flatten() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-        if val["type"].as_str() == Some("session_meta") {
-            return val["payload"]["cwd"].as_str().map(|s| s.to_string());
-        }
-        // session_meta is always the first line; stop after a few lines
-        break;
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let Some(session_id) = val["session_id"].as_str() else {
+            continue;
+        };
+        let Some(text) = val["text"].as_str().and_then(shorten_display) else {
+            continue;
+        };
+        let timestamp = val["ts"]
+            .as_i64()
+            .and_then(timestamp_from_epoch_seconds);
+        prompts.insert(
+            session_id.to_string(),
+            CodexPromptInfo {
+                text,
+                timestamp,
+            },
+        );
     }
-    None
+
+    prompts
+}
+
+fn read_codex_session_summary(
+    path: &PathBuf,
+    tool: &str,
+    prompt_info: Option<&CodexPromptInfo>,
+) -> Option<HistoryEntry> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let fallback_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(extract_session_id_from_filename);
+    let mut session_id = fallback_id;
+    let mut cwd = None;
+    let mut timestamp = None;
+    let mut last_user_display = None;
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if let Some(ts) = val["timestamp"].as_str() {
+            timestamp = Some(ts.to_string());
+        }
+        if val["type"].as_str() == Some("session_meta") {
+            if session_id.is_none() {
+                session_id = val["payload"]["id"].as_str().map(|s| s.to_string());
+            }
+            cwd = val["payload"]["cwd"].as_str().map(|s| s.to_string());
+            if timestamp.is_none() {
+                timestamp = val["payload"]["timestamp"].as_str().map(|s| s.to_string());
+            }
+            continue;
+        }
+
+        if val["type"].as_str() != Some("response_item") {
+            continue;
+        }
+        let payload = &val["payload"];
+        if payload["type"].as_str() != Some("message")
+            || payload["role"].as_str() != Some("user")
+        {
+            continue;
+        }
+        if let Some(text) = extract_text_from_codex_content(&payload["content"]) {
+            if !is_bootstrap_prompt(&text) {
+                last_user_display = shorten_display(&text);
+            }
+        }
+    }
+
+    if session_id.is_none() && prompt_info.is_none() && last_user_display.is_none() {
+        return None;
+    }
+
+    Some(HistoryEntry {
+        display: prompt_info
+            .map(|info| info.text.clone())
+            .or(last_user_display),
+        timestamp: prompt_info
+            .and_then(|info| info.timestamp.clone())
+            .or(timestamp),
+        project: cwd,
+        session_id,
+        tool: Some(tool.to_string()),
+    })
 }
 
 /// Build a map from Codex session_id → (cwd, file_path) by scanning ~/.codex/sessions/.
 fn build_codex_session_map() -> HashMap<String, (String, PathBuf)> {
     let mut map = HashMap::new();
 
-    // Scan default directory first
-    if let Some(d) = codex_dir() {
-        let sessions_dir = d.join("sessions");
-        for path in walk_jsonl_files(&sessions_dir) {
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            if let Some(session_id) = extract_session_id_from_filename(&stem) {
-                if let Some(cwd) = read_codex_session_cwd(&path) {
-                    map.insert(session_id, (cwd, path));
-                }
-            }
-        }
-    }
-
-    // Then scan subscription directory (overwrites duplicates if same session_id, which is fine)
-    let sessions_dir = codex_sub_dir().join("sessions");
-    if sessions_dir.exists() {
-        for path in walk_jsonl_files(&sessions_dir) {
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            if let Some(session_id) = extract_session_id_from_filename(&stem) {
-                if let Some(cwd) = read_codex_session_cwd(&path) {
-                    map.insert(session_id, (cwd, path));
+    for (root, tool) in codex_roots() {
+        let prompts = read_codex_history_prompts(&root);
+        for dir in codex_session_dirs(&root) {
+            for path in walk_jsonl_files(&dir) {
+                let session_id = match path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(extract_session_id_from_filename)
+                {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let prompt_info = prompts.get(&session_id);
+                if let Some(summary) = read_codex_session_summary(&path, &tool, prompt_info) {
+                    if let Some(cwd) = summary.project {
+                        map.insert(session_id, (cwd, path));
+                    }
                 }
             }
         }
@@ -269,14 +413,39 @@ fn build_codex_session_map() -> HashMap<String, (String, PathBuf)> {
     map
 }
 
+fn upsert_codex_entry(entries: &mut HashMap<String, HistoryEntry>, entry: HistoryEntry) {
+    let Some(id) = entry.session_id.clone() else {
+        return;
+    };
+
+    match entries.get_mut(&id) {
+        Some(existing) => {
+            if existing.display.is_none() {
+                existing.display = entry.display;
+            }
+            if entry.timestamp.is_some() && entry.timestamp > existing.timestamp {
+                existing.timestamp = entry.timestamp;
+            }
+            if entry.project.is_some() {
+                existing.project = entry.project;
+            }
+            if entry.tool.is_some() {
+                existing.tool = entry.tool;
+            }
+        }
+        None => {
+            entries.insert(id, entry);
+        }
+    }
+}
+
 fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
     // Build session map to get cwd for each session (already includes both directories)
     let session_map = build_codex_session_map();
 
-    let mut all_entries: Vec<serde_json::Value> = Vec::new();
+    let mut entries_by_id: HashMap<String, HistoryEntry> = HashMap::new();
 
-    // Read from default directory
-    if let Some(codex) = codex_dir() {
+    for (codex, root_tool) in codex_roots() {
         let index_path = codex.join("session_index.jsonl");
         if index_path.exists() {
             let file = fs::File::open(&index_path)
@@ -289,68 +458,57 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
                     continue;
                 }
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    all_entries.push(val);
+                    let id = match val["id"].as_str() {
+                        Some(s) => s.to_string(),
+                        None => continue,
+                    };
+                    let thread_name = val["thread_name"].as_str().map(|s| s.to_string());
+                    let updated_at = val["updated_at"].as_str().map(|s| s.to_string());
+                    let cwd = session_map.get(&id).map(|(cwd, _)| cwd.clone());
+                    let tool = session_map
+                        .get(&id)
+                        .map(|(_, path)| {
+                            if path.starts_with(codex_sub_dir()) {
+                                "codex_sub".to_string()
+                            } else {
+                                "codex".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| root_tool.clone());
+
+                    upsert_codex_entry(
+                        &mut entries_by_id,
+                        HistoryEntry {
+                            display: thread_name,
+                            timestamp: updated_at,
+                            project: cwd,
+                            session_id: Some(id),
+                            tool: Some(tool),
+                        },
+                    );
+                }
+            }
+        }
+
+        let prompts = read_codex_history_prompts(&codex);
+        for dir in codex_session_dirs(&codex) {
+            for path in walk_jsonl_files(&dir) {
+                let session_id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(extract_session_id_from_filename);
+                let prompt_info = session_id
+                    .as_ref()
+                    .and_then(|id| prompts.get(id));
+                if let Some(summary) = read_codex_session_summary(&path, &root_tool, prompt_info) {
+                    upsert_codex_entry(&mut entries_by_id, summary);
                 }
             }
         }
     }
 
-    // Read from subscription directory
-    let index_path = codex_sub_dir().join("session_index.jsonl");
-    if index_path.exists() {
-        let file = fs::File::open(&index_path)
-            .map_err(|e| format!("Failed to open codex subscription session_index: {}", e))?;
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                all_entries.push(val);
-            }
-        }
-    }
-
-    let mut entries = Vec::new();
-    let mut seen = HashSet::new();
-
-    // Deduplicate by session id (latest wins)
-    for entry in all_entries.into_iter().rev() {
-        let id = match entry["id"].as_str() {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        if seen.contains(&id) {
-            continue;
-        }
-        seen.insert(id.clone());
-
-        let thread_name = entry["thread_name"].as_str().map(|s| s.to_string());
-        let updated_at = entry["updated_at"].as_str().map(|s| s.to_string());
-        let cwd = session_map.get(&id).map(|(cwd, _)| cwd.clone());
-
-        // Check if this session came from subscription directory
-        let tool = if let Some((_, path)) = session_map.get(&id) {
-            if path.starts_with("/tmp/codex-subscription-home") {
-                Some("codex_sub".to_string())
-            } else {
-                Some("codex".to_string())
-            }
-        } else {
-            Some("codex".to_string())
-        };
-
-        entries.push(HistoryEntry {
-            display: thread_name,
-            timestamp: updated_at,
-            project: cwd,
-            session_id: Some(id),
-            tool,
-        });
-    }
-
+    let mut entries: Vec<HistoryEntry> = entries_by_id.into_values().collect();
+    entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
     entries.reverse();
     Ok(entries)
 }
@@ -358,24 +516,16 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
 /// Find a Codex session file by scanning ~/.codex/sessions/ for a file ending with `{session_id}.jsonl`.
 fn find_codex_session_file(session_id: &str) -> Option<PathBuf> {
     let suffix = format!("{}.jsonl", session_id);
-    // Check default directory first
-    if let Some(codex) = codex_dir() {
-        let sessions_dir = codex.join("sessions");
-        for path in walk_jsonl_files(&sessions_dir) {
-            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-                if fname.ends_with(&suffix) {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    // Check subscription directory if not found
-    let sessions_dir = codex_sub_dir().join("sessions");
-    if sessions_dir.exists() {
-        for path in walk_jsonl_files(&sessions_dir) {
-            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-                if fname.ends_with(&suffix) {
-                    return Some(path);
+
+    for (root, _) in codex_roots() {
+        for dir in codex_session_dirs(&root) {
+            if dir.exists() {
+                for path in walk_jsonl_files(&dir) {
+                    if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                        if fname.ends_with(&suffix) {
+                            return Some(path);
+                        }
+                    }
                 }
             }
         }

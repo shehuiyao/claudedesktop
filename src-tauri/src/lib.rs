@@ -41,9 +41,193 @@ struct AppState {
     next_id: Mutex<u32>,
 }
 
+#[derive(serde::Serialize)]
+struct SystemProxyConfig {
+    url: String,
+    source: String,
+}
+
 #[tauri::command]
 fn get_history() -> Result<Vec<history::HistoryEntry>, String> {
     history::read_history()
+}
+
+#[tauri::command]
+fn get_system_proxy() -> Result<Option<SystemProxyConfig>, String> {
+    read_system_proxy()
+}
+
+#[cfg(target_os = "macos")]
+fn read_system_proxy() -> Result<Option<SystemProxyConfig>, String> {
+    let output = Command::new("scutil")
+        .arg("--proxy")
+        .output()
+        .map_err(|e| format!("读取系统代理失败: {}", e))?;
+
+    if !output.status.success() {
+        return Err("读取系统代理失败".to_string());
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    let https_proxy = parse_scutil_proxy(&content, "HTTPS", "系统 HTTPS 代理");
+    if https_proxy.is_some() {
+        return Ok(https_proxy);
+    }
+
+    let http_proxy = parse_scutil_proxy(&content, "HTTP", "系统 HTTP 代理");
+    if http_proxy.is_some() {
+        return Ok(http_proxy);
+    }
+
+    Ok(read_networksetup_proxy())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_system_proxy() -> Result<Option<SystemProxyConfig>, String> {
+    let proxy = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .or_else(|_| std::env::var("http_proxy"))
+        .ok();
+
+    Ok(proxy.map(|url| SystemProxyConfig {
+        url,
+        source: "环境变量代理".to_string(),
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_scutil_proxy(content: &str, prefix: &str, source: &str) -> Option<SystemProxyConfig> {
+    let enabled = read_scutil_value(content, &format!("{}Enable", prefix))?;
+    if enabled != "1" {
+        return None;
+    }
+
+    let host = read_scutil_value(content, &format!("{}Proxy", prefix))?;
+    let port = read_scutil_value(content, &format!("{}Port", prefix))?;
+    if host.is_empty() || port.is_empty() {
+        return None;
+    }
+
+    let url = if host.contains("://") {
+        format!("{}:{}", host, port)
+    } else {
+        format!("http://{}:{}", host, port)
+    };
+
+    Some(SystemProxyConfig {
+        url,
+        source: source.to_string(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_scutil_value(content: &str, key: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let (line_key, value) = line.trim().split_once(':')?;
+        if line_key.trim() == key {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_networksetup_proxy() -> Option<SystemProxyConfig> {
+    let output = Command::new("networksetup")
+        .arg("-listallnetworkservices")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    for service in content.lines().map(str::trim) {
+        if service.is_empty()
+            || service.starts_with("An asterisk")
+            || service.starts_with('*')
+        {
+            continue;
+        }
+
+        if let Some(proxy) = read_networksetup_service_proxy(
+            service,
+            "-getsecurewebproxy",
+            &format!("系统 HTTPS 代理 ({})", service),
+        ) {
+            return Some(proxy);
+        }
+
+        if let Some(proxy) = read_networksetup_service_proxy(
+            service,
+            "-getwebproxy",
+            &format!("系统 HTTP 代理 ({})", service),
+        ) {
+            return Some(proxy);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn read_networksetup_service_proxy(
+    service: &str,
+    command: &str,
+    source: &str,
+) -> Option<SystemProxyConfig> {
+    let output = Command::new("networksetup")
+        .arg(command)
+        .arg(service)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    parse_networksetup_proxy(&content, source)
+}
+
+#[cfg(target_os = "macos")]
+fn parse_networksetup_proxy(content: &str, source: &str) -> Option<SystemProxyConfig> {
+    let enabled = read_colon_value(content, "Enabled")?;
+    if !enabled.eq_ignore_ascii_case("yes") {
+        return None;
+    }
+
+    let host = read_colon_value(content, "Server")?;
+    let port = read_colon_value(content, "Port")?;
+    if host.is_empty() || port.is_empty() {
+        return None;
+    }
+
+    let url = if host.contains("://") {
+        format!("{}:{}", host, port)
+    } else {
+        format!("http://{}:{}", host, port)
+    };
+
+    Some(SystemProxyConfig {
+        url,
+        source: source.to_string(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_colon_value(content: &str, key: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let (line_key, value) = line.trim().split_once(':')?;
+        if line_key.trim() == key {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
 }
 
 #[tauri::command]
@@ -65,6 +249,7 @@ fn start_session(
     state: State<'_, AppState>,
     working_dir: String,
     yolo: Option<bool>,
+    permission_mode: Option<String>,
     tool: Option<String>,
     resume_session_id: Option<String>,
     startup_command: Option<String>,
@@ -83,6 +268,7 @@ fn start_session(
         working_dir,
         id.clone(),
         yolo.unwrap_or(false),
+        permission_mode,
         tool_name,
         resume_session_id,
         startup_command,
@@ -1521,6 +1707,12 @@ fn create_worktree(path: String, branch: String) -> Result<WorktreeResult, Strin
                 branch,
             });
         }
+        if let Some(existing_path) = extract_checked_out_worktree_path(&stderr) {
+            return Ok(WorktreeResult {
+                path: existing_path,
+                branch,
+            });
+        }
         return Err(format!("创建 worktree 失败: {}", stderr.trim()));
     }
 
@@ -1528,6 +1720,17 @@ fn create_worktree(path: String, branch: String) -> Result<WorktreeResult, Strin
         path: worktree_dir.to_string_lossy().to_string(),
         branch,
     })
+}
+
+fn extract_checked_out_worktree_path(stderr: &str) -> Option<String> {
+    let marker = "already checked out at ";
+    let start = stderr.find(marker)? + marker.len();
+    let rest = stderr[start..].trim();
+    rest.trim_matches(|c| c == '\'' || c == '"' || c == '\n' || c == '\r')
+        .split_once('\n')
+        .map(|(line, _)| line.trim_matches(|c| c == '\'' || c == '"').to_string())
+        .or_else(|| Some(rest.trim_matches(|c| c == '\'' || c == '"').to_string()))
+        .filter(|path| !path.is_empty())
 }
 
 #[tauri::command]
@@ -1568,6 +1771,7 @@ pub fn run() {
             close_session,
             detect_running_launchpad_projects,
             stop_detected_launchpad_process,
+            get_system_proxy,
             check_claude_installed,
             list_directory,
             list_rule_files,

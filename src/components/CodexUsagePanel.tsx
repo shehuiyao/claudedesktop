@@ -120,6 +120,19 @@ function formatSeconds(value: number) {
   return `${value.toFixed(1)} 秒`;
 }
 
+function formatSourceLabel(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+  const area = normalized.includes("/tmp/codex-subscription-home/.codex") ? "订阅隔离" : normalized.includes("/.codex/") ? "主目录" : "本地目录";
+
+  if (normalized.endsWith("/archived_sessions")) return `${area}归档`;
+  if (normalized.endsWith("/sessions")) return `${area}会话`;
+  return area;
+}
+
+function formatSourceSummary(roots: string[]) {
+  return Array.from(new Set(roots.map(formatSourceLabel))).join(" · ");
+}
+
 function bucketLabel(mode: ViewMode, item: { date: string; hour: number }) {
   if (mode === "day") return `${String(item.hour).padStart(2, "0")}:00`;
   return item.date.slice(5);
@@ -279,6 +292,13 @@ export default function CodexUsagePanel() {
   const totals = useMemo(() => sumUsage(filteredUsage), [filteredUsage]);
   const durations = filteredSpeed.map((item) => item.duration);
   const avgDuration = average(durations);
+  const sourceSummary = useMemo(() => formatSourceSummary(report.roots), [report.roots]);
+  const isInitialChecking = loading && !report.generatedAt;
+  const statusText = isInitialChecking
+    ? "正在检查 Codex 会话数据源..."
+    : report.generatedAt
+      ? `更新于 ${new Date(report.generatedAt).toLocaleString("zh-CN")}`
+      : "等待刷新";
 
   const projectRows = useMemo(() => {
     const map = new Map<string, Bucket>();
@@ -297,7 +317,7 @@ export default function CodexUsagePanel() {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-[var(--text-primary)]">Codex API 用量</h1>
             <div className="mt-1 text-xs text-[var(--text-muted)] truncate">
-              {report.generatedAt ? `更新于 ${new Date(report.generatedAt).toLocaleString("zh-CN")}` : "等待刷新"}
+              {statusText}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -309,7 +329,7 @@ export default function CodexUsagePanel() {
               disabled={loading}
               className="px-4 py-1.5 rounded-xl bg-[var(--accent-cyan)] text-[#0d1117] text-xs font-medium hover:brightness-110 disabled:opacity-50 disabled:cursor-default cursor-pointer transition-all"
             >
-              {loading ? "刷新中" : "刷新"}
+              {loading ? (report.generatedAt ? "刷新中" : "检查中") : "刷新"}
             </button>
           </div>
         </div>
@@ -451,9 +471,21 @@ export default function CodexUsagePanel() {
           </div>
         </div>
 
-        {report.roots.length > 0 && (
-          <div className="mt-4 text-[11px] text-[var(--text-muted)] truncate" title={report.roots.join("\n")}>
-            数据来源：{report.roots.join(" · ")}
+        {(loading || report.roots.length > 0) && (
+          <div
+            className="mt-4 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]/55 px-3 py-2 flex items-center justify-between gap-3 text-[11px] text-[var(--text-muted)]"
+            title={report.roots.length > 0 ? report.roots.join("\n") : "正在扫描本机 Codex 会话目录"}
+          >
+            <span className="min-w-0 truncate">
+              {loading
+                ? "正在检查数据源：主目录会话、归档会话、订阅隔离目录"
+                : `数据来源：${sourceSummary}`}
+            </span>
+            {loading && (
+              <span className="h-1.5 w-36 shrink-0 overflow-hidden rounded-full bg-[var(--bg-primary)]">
+                <span className="block h-full w-2/3 animate-pulse rounded-full bg-[linear-gradient(90deg,var(--accent-cyan),var(--accent-blue))]" />
+              </span>
+            )}
           </div>
         )}
       </div>

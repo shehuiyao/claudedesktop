@@ -6,7 +6,7 @@ interface SidebarProps {
   onSelectSession: (projectSlug: string, sessionId: string) => void;
   onNewSession: () => void;
   onOpenProject: (projectPath: string) => void;
-  onResumeSession: (projectPath: string, sessionId: string) => void;
+  onResumeSession: (projectPath: string, sessionId: string, tool: string | null) => void;
 }
 
 function sessionLabel(entry: HistoryEntry): string {
@@ -268,7 +268,7 @@ export default function Sidebar({ activeSessionId, onSelectSession, onNewSession
                       title={entry.display ?? undefined}
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        {entry.tool === "codex" ? (
+                        {entry.tool?.startsWith("codex") ? (
                           <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-[var(--text-muted)]/15 text-[var(--text-muted)] leading-none border border-[var(--text-muted)]/30">C</span>
                         ) : (
                           <span className="shrink-0 text-[8px] font-bold px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 leading-none">C</span>
@@ -280,7 +280,7 @@ export default function Sidebar({ activeSessionId, onSelectSession, onNewSession
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          onResumeSession(entry.project!, entry.sessionId!);
+                          onResumeSession(entry.project!, entry.sessionId!, entry.tool);
                         }}
                         className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--accent-green)] cursor-pointer opacity-0 group-hover/entry:opacity-100 transition-all duration-150 shrink-0"
                         title="继续对话"
