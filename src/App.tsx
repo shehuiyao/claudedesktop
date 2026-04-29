@@ -315,16 +315,7 @@ function App() {
   }, [workingDir]);
 
   const handleToggleLaunchpad = useCallback(() => {
-    setShowLaunchpad((prev) => {
-      const next = !prev;
-      if (next) {
-        setActiveTabId(null);
-        setActiveSessionId(null);
-        setActiveProject(null);
-        setWorkingDir(null);
-      }
-      return next;
-    });
+    setShowLaunchpad((prev) => !prev);
   }, []);
 
   const handleNewSession = useCallback(async () => {
@@ -454,6 +445,7 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const showingTab = activeTabId !== null && activeTab !== undefined;
+  const isWorkspaceVisible = !showLaunchpad;
 
   // Welcome screen when nothing is selected
   const showWelcome = !showLaunchpad && !showingTab && !activeSessionId;
@@ -491,7 +483,7 @@ function App() {
                   ? `session: ${activeSessionId.slice(0, 8)}...`
                   : "Claude Code Desktop"}
             </span>
-            {workingDir && (
+            {isWorkspaceVisible && workingDir && (
               <button
                 onClick={() => invoke("open_terminal", { path: workingDir }).catch(() => {})}
                 className="w-5 h-5 flex items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-150 shrink-0"
@@ -504,7 +496,7 @@ function App() {
                 </svg>
               </button>
             )}
-            {workingDir && (
+            {isWorkspaceVisible && workingDir && (
               <div className="ml-auto flex items-center gap-2 shrink-0">
                 <BranchSwitcher
                   gitInfo={gitInfo}
@@ -543,13 +535,13 @@ function App() {
               </div>
 
               {/* Mode picker - shown when tab is terminal mode but not yet activated */}
-              {!showLaunchpad && tabs
+              {tabs
                 .filter((tab) => tab.mode === "terminal" && !terminalActivated.has(tab.id))
                 .map((tab) => (
                   <div
                     key={`pick-${tab.id}`}
                     className="absolute inset-0 flex items-center justify-center"
-                    style={{ display: tab.id === activeTabId ? "flex" : "none" }}
+                    style={{ display: isWorkspaceVisible && tab.id === activeTabId ? "flex" : "none" }}
                   >
                     <div className="text-center max-w-md w-full px-6">
                       <div className="text-sm mb-1 text-[var(--text-primary)] font-medium">
@@ -626,12 +618,12 @@ function App() {
               )}
 
               {/* Terminal mode tabs - only mount if terminal was ever activated */}
-              {!showLaunchpad && tabs
+              {tabs
                 .filter((tab) => terminalActivated.has(tab.id))
                 .map((tab) => {
                   const isActive = tab.id === activeTabId && tab.mode === "terminal";
                   const isSplit = splitTabId !== null && tab.id === splitTabId && tab.mode === "terminal";
-                  const visible = isActive || isSplit;
+                  const visible = isWorkspaceVisible && (isActive || isSplit);
 
                   let posStyle: React.CSSProperties = {};
                   if (splitTabId) {
@@ -654,7 +646,7 @@ function App() {
                           yolo={tab.yolo}
                           tool={tab.tool}
                           resumeSessionId={tab.resumeSessionId}
-                          isActive={isActive}
+                          isActive={isWorkspaceVisible && isActive}
                           onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
                           onError={() => updateTabStatus(tab.id, "error")}
                         />
@@ -686,8 +678,11 @@ function App() {
               )}
 
               {/* History session view */}
-              {!showLaunchpad && !showingTab && activeSessionId && (
-                <div className="absolute inset-0 flex flex-col overflow-hidden">
+              {activeSessionId && (
+                <div
+                  className="absolute inset-0 flex flex-col overflow-hidden"
+                  style={{ display: isWorkspaceVisible && !showingTab ? "flex" : "none" }}
+                >
                   <ChatArea
                     sessionId={activeSessionId}
                     projectSlug={activeProject}
@@ -724,7 +719,7 @@ function App() {
             </div>
 
             {/* Quick Actions panel - right side */}
-            {showQuickActions && workingDir && (
+            {isWorkspaceVisible && showQuickActions && workingDir && (
               <QuickActionsPanel
                 workingDir={workingDir}
                 onClose={() => setShowQuickActions(false)}
@@ -733,20 +728,20 @@ function App() {
             )}
 
             {/* Bug tracker panel - right side */}
-            {showBugTracker && workingDir && (
+            {isWorkspaceVisible && showBugTracker && workingDir && (
               <BugTrackerPanel workingDir={workingDir} onClose={() => setShowBugTracker(false)} />
             )}
 
             {/* Commit history panel - right side */}
-            {showCommits && workingDir && (
+            {isWorkspaceVisible && showCommits && workingDir && (
               <CommitHistory key={commitRefreshKey} workingDir={workingDir} onClose={() => setShowCommits(false)} />
             )}
 
             {/* File tree panel - right side */}
-            {showFileTree && workingDir && <FileTree rootPath={workingDir} />}
+            {isWorkspaceVisible && showFileTree && workingDir && <FileTree rootPath={workingDir} />}
 
             {/* Skills panel overlay */}
-            {showSkills && (
+            {isWorkspaceVisible && showSkills && (
               <div className="w-72 border-l border-[var(--border-subtle)] relative">
                 <SkillsPanel onClose={() => setShowSkills(false)} workingDir={workingDir} />
               </div>
