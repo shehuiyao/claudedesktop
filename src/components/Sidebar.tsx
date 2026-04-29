@@ -15,11 +15,17 @@ function sessionLabel(entry: HistoryEntry): string {
   return "Untitled";
 }
 
-const PINNED_KEY = "claude-desktop-pinned-projects";
+const PINNED_KEY = "coding-desktop-pinned-projects";
+const LEGACY_PINNED_KEY = "claude-desktop-pinned-projects";
 
 function loadPinned(): Set<string> {
   try {
-    const raw = localStorage.getItem(PINNED_KEY);
+    const current = localStorage.getItem(PINNED_KEY);
+    const legacy = localStorage.getItem(LEGACY_PINNED_KEY);
+    if (!current && legacy) {
+      localStorage.setItem(PINNED_KEY, legacy);
+    }
+    const raw = current ?? legacy;
     if (raw) return new Set(JSON.parse(raw));
   } catch {}
   return new Set();

@@ -28,6 +28,7 @@ interface ProjectRuntimeState {
   status: ProjectRuntimeStatus;
   runKey: number;
   expanded: boolean;
+  configOpen: boolean;
   lastError: string;
 }
 
@@ -41,7 +42,8 @@ interface DetectedRunningProject {
   ports?: string[];
 }
 
-const STORAGE_KEY = "claude-desktop-launchpad-projects";
+const STORAGE_KEY = "coding-desktop-launchpad-projects";
+const LEGACY_STORAGE_KEY = "claude-desktop-launchpad-projects";
 const DEFAULT_GROUP_NAME = "默认分组";
 
 function isActiveRuntimeStatus(status: ProjectRuntimeStatus) {
@@ -138,7 +140,12 @@ function normalizeLaunchpadData(value: unknown): LaunchpadData {
 
 function loadLaunchpadData(): LaunchpadData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const current = localStorage.getItem(STORAGE_KEY);
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!current && legacy) {
+      localStorage.setItem(STORAGE_KEY, legacy);
+    }
+    const raw = current ?? legacy;
     if (!raw) return normalizeLaunchpadData(null);
     const parsed = JSON.parse(raw);
     return normalizeLaunchpadData(parsed);
@@ -152,6 +159,7 @@ function emptyRuntime(): ProjectRuntimeState {
     status: "idle",
     runKey: 0,
     expanded: false,
+    configOpen: false,
     lastError: "",
   };
 }
@@ -640,7 +648,7 @@ export default function LaunchpadPanel() {
             )}
 
             <div
-              className={`grid grid-cols-[repeat(auto-fit,minmax(420px,1fr))] gap-5 ${
+              className={`grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4 ${
                 activeGroupProjects.length === 0 ? "hidden" : ""
               }`}
             >
@@ -649,21 +657,23 @@ export default function LaunchpadPanel() {
                 const isRunning = state.status === "starting" || state.status === "running";
                 const isDetectedRunning = state.status === "detected";
                 const canStart = project.workingDir.trim() !== "" && project.startCommand.trim() !== "";
+                const isConfigOpen = state.configOpen || !canStart;
                 const isVisibleProject = project.groupId === activeGroup.id;
 
                 return (
                   <div
                     key={project.id}
-                    className={`${isVisibleProject ? "flex" : "hidden"} min-h-[420px] flex-col rounded-2xl border border-[var(--border-color)] bg-[linear-gradient(180deg,rgba(22,27,34,0.96),rgba(13,17,23,0.98))] shadow-[0_16px_45px_var(--shadow-color)]`}
+                    className={`${isVisibleProject ? "flex" : "hidden"} min-h-[360px] flex-col rounded-2xl border border-[var(--border-color)] shadow-[0_16px_45px_var(--shadow-color)]`}
+                    style={{ background: "var(--launchpad-card-bg)" }}
                     aria-hidden={!isVisibleProject}
                   >
-                  <div className="border-b border-[var(--border-color)] px-4 py-4">
+                  <div className="border-b border-[var(--border-color)] px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <input
                           value={project.name}
                           onChange={(e) => updateProject(project.id, { name: e.target.value })}
-                          className="w-full border-none bg-transparent text-base font-semibold text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                          className="w-full border-none bg-transparent text-sm font-semibold text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
                           placeholder="项目名称，例如：收银台前端"
                         />
                         <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
@@ -676,11 +686,11 @@ export default function LaunchpadPanel() {
                         {statusText(state.status)}
                       </span>
                     </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         onClick={() => (isRunning ? handleStop(project.id) : handleStart(project.id))}
                         disabled={isDetectedRunning || (!isRunning && !canStart)}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                        className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition ${
                           isRunning
                             ? "bg-[var(--accent-red)] text-white hover:brightness-110"
                             : "bg-[var(--accent-green)] text-[#08140d] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
@@ -691,30 +701,45 @@ export default function LaunchpadPanel() {
                       {isRunning && (
                         <button
                           onClick={() => handleRestart(project.id)}
-                          className="rounded-lg border border-[var(--accent-cyan)]/45 px-3 py-1.5 text-xs text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10 hover:text-[var(--text-primary)]"
+                          className="rounded-lg border border-[var(--accent-cyan)]/45 px-3 py-1.5 text-[11px] text-[var(--accent-cyan)] transition hover:bg-[var(--accent-cyan)]/10 hover:text-[var(--text-primary)]"
                         >
                           重启
                         </button>
                       )}
                       <button
                         onClick={() => pickWorkingDir(project.id)}
-                        className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)]"
+                        className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)]"
                       >
                         选择目录
+                      </button>
+                      <button
+                        onClick={() =>
+                          setProjectRuntime(project.id, (current) => ({
+                            ...current,
+                            configOpen: !isConfigOpen,
+                          }))
+                        }
+                        className={`rounded-lg border px-3 py-1.5 text-[11px] transition ${
+                          isConfigOpen
+                            ? "border-[var(--accent-cyan)]/45 text-[var(--accent-cyan)]"
+                            : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)]"
+                        }`}
+                      >
+                        {isConfigOpen ? "收起配置" : "配置"}
                       </button>
                       {state.expanded && !isRunning && (
                         <button
                           onClick={() =>
                             setProjectRuntime(project.id, (current) => ({ ...current, expanded: false }))
                           }
-                          className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
+                          className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
                         >
                           收起终端
                         </button>
                       )}
                       <button
                         onClick={() => removeProject(project.id)}
-                        className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition hover:border-[var(--accent-red)] hover:text-[var(--accent-red)]"
+                        className="rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] transition hover:border-[var(--accent-red)] hover:text-[var(--accent-red)]"
                       >
                         删除
                       </button>
@@ -723,11 +748,11 @@ export default function LaunchpadPanel() {
                           <select
                             value={project.groupId}
                             onChange={(event) => updateProject(project.id, { groupId: event.target.value })}
-                            className="h-9 appearance-none rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 pr-8 text-xs text-[var(--text-secondary)] outline-none transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)] focus:border-[var(--accent-cyan)] focus:text-[var(--text-primary)]"
+                            className="h-8 appearance-none rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 pr-8 text-[11px] text-[var(--text-secondary)] outline-none transition hover:border-[var(--accent-cyan)] hover:text-[var(--text-primary)] focus:border-[var(--accent-cyan)] focus:text-[var(--text-primary)]"
                           >
                             {groups.map((group) => (
                               <option key={group.id} value={group.id} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
-                                移到：{group.name || DEFAULT_GROUP_NAME}
+                                {group.name || DEFAULT_GROUP_NAME}
                               </option>
                             ))}
                           </select>
@@ -739,44 +764,46 @@ export default function LaunchpadPanel() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 px-4 py-4">
-                    <label className="block">
-                      <div className="mb-1.5 text-[11px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                        Working Directory
-                      </div>
-                      <input
-                        value={project.workingDir}
-                        onChange={(e) => updateProject(project.id, { workingDir: e.target.value })}
-                        className="w-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2.5 font-mono text-xs text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
-                        placeholder="/Users/you/project"
-                      />
-                    </label>
+                  {isConfigOpen && (
+                    <div className="grid gap-2 border-b border-[var(--border-color)]/70 px-4 py-3">
+                      <label className="block">
+                        <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                          Working Directory
+                        </div>
+                        <input
+                          value={project.workingDir}
+                          onChange={(e) => updateProject(project.id, { workingDir: e.target.value })}
+                          className="w-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[11px] text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
+                          placeholder="/Users/you/project"
+                        />
+                      </label>
 
-                    <label className="block">
-                      <div className="mb-1.5 text-[11px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                        Start Command
-                      </div>
-                      <textarea
-                        value={project.startCommand}
-                        onChange={(e) => updateProject(project.id, { startCommand: e.target.value })}
-                        className="min-h-[92px] w-full resize-y rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2.5 font-mono text-xs leading-6 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
-                        placeholder="前端：PORT=3010 npm start&#10;后端：conda run -n pf-backend-py37 python app.py --debug=1 --mode=3"
-                      />
-                      <div className="mt-1.5 text-[11px] leading-5 text-[var(--text-muted)]">
-                        后端建议用 `conda run` 或绝对 Python 路径启动，少用 `source activate`，避免服务挂掉后 shell 还停在 py 环境里。
-                      </div>
-                    </label>
+                      <label className="block">
+                        <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                          Start Command
+                        </div>
+                        <textarea
+                          value={project.startCommand}
+                          onChange={(e) => updateProject(project.id, { startCommand: e.target.value })}
+                          className="min-h-[68px] w-full resize-y rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-[11px] leading-5 text-[var(--text-primary)] outline-none transition focus:border-[var(--accent-cyan)]"
+                          placeholder="前端：PORT=3010 npm start&#10;后端：conda run -n pf-backend-py37 python app.py --debug=1 --mode=3"
+                        />
+                        <div className="mt-1 text-[10px] leading-5 text-[var(--text-muted)]">
+                          后端建议用 `conda run` 或绝对 Python 路径启动，少用 `source activate`。
+                        </div>
+                      </label>
+                    </div>
+                  )}
 
-                    {state.lastError && (
-                      <div className="rounded-xl border border-[var(--accent-red)]/25 bg-[var(--accent-red)]/10 px-3 py-2 text-xs text-[var(--accent-red)]">
-                        {state.lastError}
-                      </div>
-                    )}
-                  </div>
+                  {state.lastError && (
+                    <div className="mx-4 mt-3 rounded-xl border border-[var(--accent-red)]/25 bg-[var(--accent-red)]/10 px-3 py-2 text-xs text-[var(--accent-red)]">
+                      {state.lastError}
+                    </div>
+                  )}
 
-                  <div className="flex-1 px-4 pb-4">
+                  <div className="flex-1 px-4 py-3">
                     {state.expanded ? (
-                      <div className="h-[300px] overflow-hidden rounded-2xl border border-[var(--border-color)] bg-[var(--bg-primary)]">
+                      <div className="h-[280px] overflow-hidden rounded-2xl border border-[var(--border-color)] bg-[var(--bg-primary)]">
                         <LiveTerminal
                           key={`${project.id}-${state.runKey}`}
                           workingDir={project.workingDir}
@@ -808,12 +835,12 @@ export default function LaunchpadPanel() {
                         />
                       </div>
                     ) : (
-                      <div className="flex h-[300px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-primary)]/70 px-6 text-center">
+                      <div className="flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-primary)]/70 px-6 text-center">
                         <div>
-                          <div className="text-sm font-medium text-[var(--text-primary)]">
+                          <div className="text-xs font-medium text-[var(--text-primary)]">
                             {canStart ? "准备就绪" : "先补全目录和启动命令"}
                           </div>
-                          <div className="mt-2 text-xs leading-6 text-[var(--text-secondary)]">
+                          <div className="mt-2 text-[11px] leading-5 text-[var(--text-secondary)]">
                             启动后会在这里显示实时终端输出，你可以把前端、后端、代理服务放在同一页里一起盯。
                           </div>
                         </div>

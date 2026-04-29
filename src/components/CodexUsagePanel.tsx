@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 type ViewMode = "day" | "week" | "month";
@@ -37,6 +37,15 @@ interface Bucket {
   reasoning: number;
   total: number;
   durations: number[];
+}
+
+interface ActivityDay {
+  date: string;
+  month: string;
+  turns: number;
+  total: number;
+  output: number;
+  level: number;
 }
 
 const EMPTY_REPORT: CodexUsageReport = {
@@ -120,6 +129,10 @@ function formatSeconds(value: number) {
   return `${value.toFixed(1)} 秒`;
 }
 
+function formatActivityDate(value: string) {
+  return parseDate(value).toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+}
+
 function formatSourceLabel(path: string) {
   const normalized = path.replace(/\\/g, "/");
   const area = normalized.includes("/tmp/codex-subscription-home/.codex") ? "订阅隔离" : normalized.includes("/.codex/") ? "主目录" : "本地目录";
@@ -175,6 +188,38 @@ function sumUsage(items: CodexUsageItem[]) {
   return bucket;
 }
 
+function buildActivityDays(selectedDate: string, usage: CodexUsageItem[], weeks = 18) {
+  const end = parseDate(selectedDate);
+  const endOffset = end.getDay();
+  const gridEnd = addDays(end, 6 - endOffset);
+  const gridStart = addDays(gridEnd, -(weeks * 7 - 1));
+  const byDate = new Map<string, Bucket>();
+
+  usage.forEach((item) => {
+    if (!byDate.has(item.date)) byDate.set(item.date, emptyBucket(item.date));
+    addUsage(byDate.get(item.date)!, item);
+  });
+
+  const maxTotal = Math.max(...Array.from(byDate.values()).map((item) => item.total), 1);
+  const days: ActivityDay[] = [];
+
+  for (let date = new Date(gridStart); date <= gridEnd; date = addDays(date, 1)) {
+    const key = dateKey(date);
+    const bucket = byDate.get(key) ?? emptyBucket(key);
+    const level = bucket.total === 0 ? 0 : Math.max(1, Math.ceil((bucket.total / maxTotal) * 4));
+    days.push({
+      date: key,
+      month: date.toLocaleDateString("zh-CN", { month: "short" }),
+      turns: bucket.turns,
+      total: bucket.total,
+      output: bucket.output,
+      level,
+    });
+  }
+
+  return days;
+}
+
 function makeLinePath(points: Bucket[], key: "total" | "output" | "avgDuration", width: number, height: number, baseY: number) {
   const values = points.map((point) => key === "avgDuration" ? average(point.durations) || 0 : point[key]);
   const max = Math.max(...values, 1);
@@ -186,65 +231,215 @@ function makeLinePath(points: Bucket[], key: "total" | "output" | "avgDuration",
   }).join(" ");
 }
 
+function ChartTooltip({
+  x,
+  y,
+  children,
+}: {
+  x: number;
+  y: number;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute z-10 min-w-[170px] rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-secondary)] shadow-[0_16px_38px_var(--shadow-color)]"
+      style={{
+        left: `${(x / 790) * 100}%`,
+        top: `${(y / 310) * 100}%`,
+        transform: "translate(-50%, calc(-100% - 10px))",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function UsageChart({ points }: { points: Bucket[] }) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 700;
   const height = 210;
   const step = points.length > 1 ? width / (points.length - 1) : width;
   const max = Math.max(...points.map((point) => point.total), 1);
   const labelEvery = Math.max(1, Math.ceil(points.length / 10));
+  const hoverPoint = hoverIndex === null ? null : points[hoverIndex];
+  const hoverX = hoverIndex === null ? 0 : 42 + hoverIndex * step;
+  const hoverY = hoverPoint ? 252 - (hoverPoint.total / max) * height : 0;
 
   return (
-    <svg viewBox="0 0 790 310" className="w-full min-h-[220px]">
-      <line x1="38" y1="252" x2="760" y2="252" stroke="var(--border-color)" />
-      <path d={makeLinePath(points, "total", width, height, 252)} fill="none" stroke="var(--accent-cyan)" strokeWidth="3" />
-      <path d={makeLinePath(points, "output", width, height, 252)} fill="none" stroke="var(--accent-orange)" strokeWidth="2" />
-      {points.map((point, index) => {
-        const x = 42 + index * step;
-        const y = 252 - (point.total / max) * height;
-        return (
-          <g key={point.label}>
-            <circle cx={x} cy={y} r="4" fill="var(--bg-secondary)" stroke="var(--accent-cyan)" strokeWidth="2">
-              <title>{`${point.label}\n总量 ${formatTokens(point.total)}\n输出 ${formatTokens(point.output)}`}</title>
-            </circle>
-            {index % labelEvery === 0 && (
-              <text x={x} y="292" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{point.label}</text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+    <div className="relative" onMouseLeave={() => setHoverIndex(null)}>
+      <svg viewBox="0 0 790 310" className="w-full min-h-[220px]">
+        <line x1="38" y1="252" x2="760" y2="252" stroke="var(--border-color)" />
+        {hoverPoint && (
+          <line x1={hoverX} y1="34" x2={hoverX} y2="252" stroke="var(--border-color)" strokeDasharray="4 4" />
+        )}
+        <path d={makeLinePath(points, "total", width, height, 252)} fill="none" stroke="var(--accent-cyan)" strokeWidth="3" />
+        <path d={makeLinePath(points, "output", width, height, 252)} fill="none" stroke="var(--accent-orange)" strokeWidth="2" />
+        {points.map((point, index) => {
+          const x = 42 + index * step;
+          const y = 252 - (point.total / max) * height;
+          const isHover = hoverIndex === index;
+          return (
+            <g key={point.label} onMouseEnter={() => setHoverIndex(index)}>
+              <rect x={x - step / 2} y="20" width={Math.max(step, 18)} height="250" fill="transparent" />
+              <circle cx={x} cy={y} r={isHover ? 6 : 4} fill="var(--bg-secondary)" stroke="var(--accent-cyan)" strokeWidth="2" />
+              {index % labelEvery === 0 && (
+                <text x={x} y="292" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{point.label}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {hoverPoint && (
+        <ChartTooltip x={hoverX} y={Math.max(52, hoverY)}>
+          <div className="mb-1 font-medium text-[var(--text-primary)]">{hoverPoint.label}</div>
+          <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-1">
+            <span>总量</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.total)}</span>
+            <span>输出</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.output)}</span>
+            <span>缓存</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.cached)}</span>
+            <span>请求</span><span className="text-right text-[var(--text-primary)] tabular-nums">{hoverPoint.turns}</span>
+          </div>
+        </ChartTooltip>
+      )}
+    </div>
   );
 }
 
 function SpeedChart({ points }: { points: Bucket[] }) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 700;
   const height = 190;
   const step = points.length > 1 ? width / (points.length - 1) : width;
   const values = points.map((point) => average(point.durations) || 0);
   const max = Math.max(...values, 1);
   const labelEvery = Math.max(1, Math.ceil(points.length / 10));
+  const hoverPoint = hoverIndex === null ? null : points[hoverIndex];
+  const hoverAvg = hoverIndex === null ? 0 : values[hoverIndex];
+  const hoverX = hoverIndex === null ? 0 : 42 + hoverIndex * step;
+  const hoverY = 232 - (hoverAvg / max) * height;
+  const longest = hoverPoint ? Math.max(...hoverPoint.durations, 0) : 0;
 
   return (
-    <svg viewBox="0 0 790 280" className="w-full min-h-[200px]">
-      <line x1="38" y1="232" x2="760" y2="232" stroke="var(--border-color)" />
-      <path d={makeLinePath(points, "avgDuration", width, height, 232)} fill="none" stroke="var(--accent-blue)" strokeWidth="3" />
-      {points.map((point, index) => {
-        const avg = values[index];
-        const x = 42 + index * step;
-        const y = 232 - (avg / max) * height;
-        const longest = Math.max(...point.durations, 0);
-        return (
-          <g key={point.label}>
-            <circle cx={x} cy={y} r="5" fill="var(--bg-secondary)" stroke="var(--accent-blue)" strokeWidth="2">
-              <title>{`${point.label}\n平均耗时 ${formatSeconds(avg)}\n可计算轮数 ${point.durations.length}\n最长一轮 ${formatSeconds(longest)}`}</title>
-            </circle>
-            {index % labelEvery === 0 && (
-              <text x={x} y="266" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{point.label}</text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+    <div className="relative" onMouseLeave={() => setHoverIndex(null)}>
+      <svg viewBox="0 0 790 280" className="w-full min-h-[200px]">
+        <line x1="38" y1="232" x2="760" y2="232" stroke="var(--border-color)" />
+        {hoverPoint && (
+          <line x1={hoverX} y1="34" x2={hoverX} y2="232" stroke="var(--border-color)" strokeDasharray="4 4" />
+        )}
+        <path d={makeLinePath(points, "avgDuration", width, height, 232)} fill="none" stroke="var(--accent-blue)" strokeWidth="3" />
+        {points.map((point, index) => {
+          const avg = values[index];
+          const x = 42 + index * step;
+          const y = 232 - (avg / max) * height;
+          const isHover = hoverIndex === index;
+          return (
+            <g key={point.label} onMouseEnter={() => setHoverIndex(index)}>
+              <rect x={x - step / 2} y="20" width={Math.max(step, 18)} height="230" fill="transparent" />
+              <circle cx={x} cy={y} r={isHover ? 7 : 5} fill="var(--bg-secondary)" stroke="var(--accent-blue)" strokeWidth="2" />
+              {index % labelEvery === 0 && (
+                <text x={x} y="266" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{point.label}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {hoverPoint && (
+        <ChartTooltip x={hoverX} y={Math.max(52, hoverY)}>
+          <div className="mb-1 font-medium text-[var(--text-primary)]">{hoverPoint.label}</div>
+          <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-1">
+            <span>平均耗时</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatSeconds(hoverAvg)}</span>
+            <span>可计算轮数</span><span className="text-right text-[var(--text-primary)] tabular-nums">{hoverPoint.durations.length}</span>
+            <span>最长一轮</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatSeconds(longest)}</span>
+          </div>
+        </ChartTooltip>
+      )}
+    </div>
+  );
+}
+
+function ActivityHeatmap({ days }: { days: ActivityDay[] }) {
+  const weeks = Math.ceil(days.length / 7);
+  const monthLabels = days.reduce<{ month: string; column: number }[]>((labels, day, index) => {
+    const column = Math.floor(index / 7);
+    const isFirstInColumn = index % 7 === 0;
+    const last = labels[labels.length - 1];
+    if (isFirstInColumn && (!last || last.month !== day.month)) {
+      labels.push({ month: day.month, column });
+    }
+    return labels;
+  }, []);
+  const totalTurns = days.reduce((sum, day) => sum + day.turns, 0);
+  const activeDays = days.filter((day) => day.turns > 0).length;
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 p-4 min-w-0">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-[var(--text-primary)]">活跃度</h2>
+          <div className="mt-1 text-[11px] text-[var(--text-muted)]">
+            最近 {weeks} 周 · {activeDays} 天有使用 · {totalTurns} 次请求
+          </div>
+        </div>
+        <span className="text-[11px] text-[var(--text-muted)]">按 token 总量着色</span>
+      </div>
+
+      <div className="overflow-x-auto pb-1">
+        <div className="min-w-max">
+          <div
+            className="mb-1 grid h-4 text-[10px] text-[var(--text-muted)]"
+            style={{ gridTemplateColumns: `repeat(${weeks}, 18px)`, columnGap: 6 }}
+          >
+            {monthLabels.map((item) => (
+              <span key={`${item.month}-${item.column}`} style={{ gridColumnStart: item.column + 1 }}>
+                {item.month}
+              </span>
+            ))}
+          </div>
+          <div
+            className="grid grid-flow-col grid-rows-7 gap-1.5"
+            style={{ gridTemplateColumns: `repeat(${weeks}, 18px)` }}
+          >
+            {days.map((day) => (
+              <div
+                key={day.date}
+                className={`h-[18px] w-[18px] rounded-[4px] border border-[var(--activity-border)] ${
+                  day.level === 0
+                    ? "bg-[var(--bg-tertiary)]"
+                    : day.level === 1
+                      ? "bg-[var(--activity-level-1)]"
+                      : day.level === 2
+                        ? "bg-[var(--activity-level-2)]"
+                        : day.level === 3
+                          ? "bg-[var(--activity-level-3)]"
+                          : "bg-[var(--activity-level-4)]"
+                }`}
+                title={`${formatActivityDate(day.date)}\n请求 ${day.turns} 次\n总量 ${formatTokens(day.total)}\n输出 ${formatTokens(day.output)}`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center justify-center gap-2 text-xs text-[var(--text-muted)]">
+        <span>Less</span>
+        {[0, 1, 2, 3, 4].map((level) => (
+          <span
+            key={level}
+            className={`h-[18px] w-[18px] rounded-[4px] border border-[var(--activity-border)] ${
+              level === 0
+                ? "bg-[var(--bg-tertiary)]"
+                : level === 1
+                  ? "bg-[var(--activity-level-1)]"
+                  : level === 2
+                    ? "bg-[var(--activity-level-2)]"
+                    : level === 3
+                      ? "bg-[var(--activity-level-3)]"
+                      : "bg-[var(--activity-level-4)]"
+            }`}
+          />
+        ))}
+        <span>More</span>
+      </div>
+    </div>
   );
 }
 
@@ -289,6 +484,11 @@ export default function CodexUsagePanel() {
     [end, report.speed, selectedProject, start],
   );
   const buckets = useMemo(() => buildBuckets(mode, selectedDate, filteredUsage, filteredSpeed), [filteredSpeed, filteredUsage, mode, selectedDate]);
+  const activityUsage = useMemo(
+    () => report.usage.filter((item) => selectedProject === "all" || item.project === selectedProject),
+    [report.usage, selectedProject],
+  );
+  const activityDays = useMemo(() => buildActivityDays(selectedDate, activityUsage), [activityUsage, selectedDate]);
   const totals = useMemo(() => sumUsage(filteredUsage), [filteredUsage]);
   const durations = filteredSpeed.map((item) => item.duration);
   const avgDuration = average(durations);
@@ -396,6 +596,10 @@ export default function CodexUsagePanel() {
               <div className="text-[11px] text-[var(--text-muted)] mt-2 truncate">{sub}</div>
             </div>
           ))}
+        </div>
+
+        <div className="mb-4">
+          <ActivityHeatmap days={activityDays} />
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.9fr] gap-4 mb-4">

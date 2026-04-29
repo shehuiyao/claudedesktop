@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/tauri-apps__tauri/tauri-v2/tooling/cli/schema.json",
-  "productName": "Claude Desktop",
-  "version": "0.9.18",
-  "identifier": "com.claude-desktop.app",
+  "productName": "Coding Desktop",
+  "version": "0.9.19",
+  "identifier": "com.coding-desktop.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Claude Code Desktop",
+        "title": "Coding Desktop",
         "width": 1000,
         "height": 700,
         "minWidth": 600,
@@ -45,7 +45,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/shehuiyao/claudedesktop/releases/latest/download/latest.json"
+        "https://github.com/shehuiyao/codingdesktop/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJGMkUzMDAwMkVBNjMyM0IKUldRN01xWXVBREF1djZ5VU5CaXM2Sk5ZOGQ0Q3pJVE02L0pLckd2Skp0Nk1BNktzemNldWE0Nm8K"
     }

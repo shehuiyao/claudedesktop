@@ -4,7 +4,10 @@ type ThemeMode = "dark" | "light" | "system";
 
 export function useTheme() {
   const [mode, setMode] = useState<ThemeMode>(() => {
-    return (localStorage.getItem("theme-mode") as ThemeMode) || "dark";
+    const storedMode = localStorage.getItem("theme-mode");
+    return storedMode === "dark" || storedMode === "light" || storedMode === "system"
+      ? storedMode
+      : "system";
   });
 
   const getSystemTheme = useCallback((): "dark" | "light" => {

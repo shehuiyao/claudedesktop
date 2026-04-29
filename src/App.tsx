@@ -25,7 +25,8 @@ interface GitInfo {
 
 type CodexTool = Extract<CliTool, "codex" | "codex_sub">;
 
-const CODEX_PERMISSION_KEY = "claude-desktop-codex-permission-modes";
+const CODEX_PERMISSION_KEY = "coding-desktop-codex-permission-modes";
+const LEGACY_CODEX_PERMISSION_KEY = "claude-desktop-codex-permission-modes";
 const DEFAULT_CODEX_PERMISSION_MODES: Record<CodexTool, CodexPermissionMode> = {
   codex_sub: "full_access",
   codex: "full_access",
@@ -39,7 +40,12 @@ const CODEX_PERMISSION_OPTIONS: { value: CodexPermissionMode; label: string }[] 
 
 function loadCodexPermissionModes(): Record<CodexTool, CodexPermissionMode> {
   try {
-    const raw = localStorage.getItem(CODEX_PERMISSION_KEY);
+    const current = localStorage.getItem(CODEX_PERMISSION_KEY);
+    const legacy = localStorage.getItem(LEGACY_CODEX_PERMISSION_KEY);
+    if (!current && legacy) {
+      localStorage.setItem(CODEX_PERMISSION_KEY, legacy);
+    }
+    const raw = current ?? legacy;
     if (!raw) return DEFAULT_CODEX_PERMISSION_MODES;
     const parsed = JSON.parse(raw) as Partial<Record<CodexTool, CodexPermissionMode>>;
     return {
@@ -74,7 +80,7 @@ function App() {
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [showLaunchpad, setShowLaunchpad] = useState(true);
+  const [showLaunchpad, setShowLaunchpad] = useState(false);
   const [showCodexUsage, setShowCodexUsage] = useState(false);
   const [moreModePickerTabId, setMoreModePickerTabId] = useState<string | null>(null);
   const [codexPermissionModes, setCodexPermissionModes] = useState<Record<CodexTool, CodexPermissionMode>>(loadCodexPermissionModes);
@@ -572,7 +578,7 @@ function App() {
                 ? activeTab.workingDir
                 : activeSessionId
                   ? `session: ${activeSessionId.slice(0, 8)}...`
-                  : "Claude Code Desktop"}
+                  : "Coding Desktop"}
             </span>
             {isWorkspaceVisible && workingDir && (
               <button
@@ -640,7 +646,7 @@ function App() {
                     className="absolute inset-0 flex items-center justify-center"
                     style={{ display: isWorkspaceVisible && tab.id === activeTabId ? "flex" : "none" }}
                   >
-                    <div className="text-center max-w-md w-full px-6">
+                    <div className="w-full max-w-[860px] px-6 text-center">
                       <div className="text-sm mb-1 text-[var(--text-primary)] font-medium">
                         {tab.label}
                       </div>
@@ -659,11 +665,11 @@ function App() {
                           {tab.workingDir}
                         </div>
                       )}
-                      <div className="flex gap-3 justify-center flex-wrap">
-                        <div className="flex-1 max-w-[180px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] transition-all duration-150 group overflow-hidden">
+                      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div className="group flex min-h-[140px] min-w-0 flex-col justify-between overflow-hidden rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] transition-all duration-150 hover:border-[#10a37f] hover:bg-[var(--bg-hover)]">
                           <button
                             onClick={() => handleStartCodexTerminal(tab.id, "codex_sub")}
-                            className="w-full py-3 px-4 cursor-pointer"
+                            className="w-full cursor-pointer px-5 py-4"
                           >
                             <div className="text-sm font-medium text-[#10a37f] mb-1">Codex 订阅</div>
                             <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -675,7 +681,7 @@ function App() {
                               <select
                                 value={codexPermissionModes.codex_sub}
                                 onChange={(event) => handleCodexPermissionChange("codex_sub", event.target.value as CodexPermissionMode)}
-                                className="appearance-none w-full h-8 rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-2 pr-7 text-[10px] text-[var(--text-secondary)] outline-none cursor-pointer hover:text-[var(--text-primary)]"
+                                className="h-8 w-full cursor-pointer appearance-none rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-3 pr-8 text-xs text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)]"
                               >
                                 {CODEX_PERMISSION_OPTIONS.map((option) => (
                                   <option key={option.value} value={option.value} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -687,10 +693,10 @@ function App() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex-1 max-w-[180px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#10a37f] hover:bg-[var(--bg-hover)] transition-all duration-150 group overflow-hidden">
+                        <div className="group flex min-h-[140px] min-w-0 flex-col justify-between overflow-hidden rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] transition-all duration-150 hover:border-[#10a37f] hover:bg-[var(--bg-hover)]">
                           <button
                             onClick={() => handleStartCodexTerminal(tab.id, "codex")}
-                            className="w-full py-3 px-4 cursor-pointer"
+                            className="w-full cursor-pointer px-5 py-4"
                           >
                             <div className="text-sm font-medium text-[#10a37f] mb-1">本地配置 Codex</div>
                             <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -702,7 +708,7 @@ function App() {
                               <select
                                 value={codexPermissionModes.codex}
                                 onChange={(event) => handleCodexPermissionChange("codex", event.target.value as CodexPermissionMode)}
-                                className="appearance-none w-full h-8 rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-2 pr-7 text-[10px] text-[var(--text-secondary)] outline-none cursor-pointer hover:text-[var(--text-primary)]"
+                                className="h-8 w-full cursor-pointer appearance-none rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] pl-3 pr-8 text-xs text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)]"
                               >
                                 {CODEX_PERMISSION_OPTIONS.map((option) => (
                                   <option key={option.value} value={option.value} className="bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -716,7 +722,7 @@ function App() {
                         </div>
                         <button
                           onClick={() => setMoreModePickerTabId((current) => current === tab.id ? null : tab.id)}
-                          className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                          className="group flex min-h-[140px] min-w-0 cursor-pointer flex-col items-center justify-center rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-5 py-4 transition-all duration-150 hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)]"
                         >
                           <div className="text-sm font-medium text-[var(--accent-cyan)] mb-1">更多</div>
                           <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -724,10 +730,10 @@ function App() {
                           </div>
                         </button>
                         {moreModePickerTabId === tab.id && (
-                          <div className="w-full mt-1 pt-3 border-t border-[var(--border-subtle)] flex gap-3 justify-center flex-wrap">
+                          <div className="col-span-1 mt-1 grid grid-cols-1 gap-3 border-t border-[var(--border-subtle)] pt-4 sm:col-span-3 sm:grid-cols-4">
                             <button
                               onClick={() => handleStartTerminal(tab.id, false)}
-                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                              className="group min-w-0 cursor-pointer rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-4 py-3 transition-all duration-150 hover:border-[var(--accent-cyan)] hover:bg-[var(--bg-hover)]"
                             >
                               <div className="text-sm font-medium text-[var(--accent-cyan)] mb-1">Normal</div>
                               <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -736,7 +742,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => handleStartTerminal(tab.id, true)}
-                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-orange)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                              className="group min-w-0 cursor-pointer rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-4 py-3 transition-all duration-150 hover:border-[var(--accent-orange)] hover:bg-[var(--bg-hover)]"
                             >
                               <div className="text-sm font-medium text-[var(--accent-orange)] mb-1">YOLO</div>
                               <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -745,7 +751,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => handleStartTerminal(tab.id, false, "gemini")}
-                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#4285F4] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                              className="group min-w-0 cursor-pointer rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-4 py-3 transition-all duration-150 hover:border-[#4285F4] hover:bg-[var(--bg-hover)]"
                             >
                               <div className="text-sm font-medium text-[#4285F4] mb-1">Gemini</div>
                               <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -754,7 +760,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => handleStartTerminal(tab.id, false, "volc")}
-                              className="flex-1 max-w-[180px] py-3 px-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[#FF6B35] hover:bg-[var(--bg-hover)] cursor-pointer transition-all duration-150 group"
+                              className="group min-w-0 cursor-pointer rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-4 py-3 transition-all duration-150 hover:border-[#FF6B35] hover:bg-[var(--bg-hover)]"
                             >
                               <div className="text-sm font-medium text-[#FF6B35] mb-1">火山</div>
                               <div className="text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]">
@@ -854,10 +860,10 @@ function App() {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="text-center max-w-sm w-full px-6">
                     <div className="text-lg mb-1 text-[var(--text-primary)] font-medium">
-                      Claude Code Desktop
+                      Coding Desktop
                     </div>
                     <div className="text-xs mb-8 text-[var(--text-muted)]">
-                      Select a project folder to start a new Claude session
+                      Select a project folder to start a new coding session
                     </div>
                     <button
                       onClick={handleNewTab}
@@ -968,7 +974,7 @@ function App() {
           }`}
           title="Codex API 用量"
         >
-          Codex
+          API Use
         </button>
       </div>
 

@@ -1,6 +1,6 @@
 # 发版已知问题记录
 
-这个文件记录 Claude Desktop 发版时遇到过的坑点。它的作用像设计稿里的标注层：不代替主流程，但把容易误读、容易点错的地方固定下来，避免后面重复踩坑。
+这个文件记录 Coding Desktop 发版时遇到过的坑点。它的作用像设计稿里的标注层：不代替主流程，但把容易误读、容易点错的地方固定下来，避免后面重复踩坑。
 
 ## 流程入口
 
@@ -9,17 +9,17 @@
 
 ## 产物命名
 
-- Tauri 构建出来的自动更新包真实文件名是 `Claude Desktop.app.tar.gz`，中间是空格。
+- Tauri 构建出来的自动更新包真实文件名是 `Coding Desktop.app.tar.gz`，中间是空格。
 - 生成 `latest.json` 前必须先读取 `src-tauri/target/release/bundle/` 下的真实 `.app.tar.gz` 和 `.sig` 文件，签名必须来自真实 `.sig`。
-- GitHub Release 资产名可以按历史稳定格式改成无空格版本，例如把构建产物复制为 `/tmp/Claude.Desktop.app.tar.gz` 后上传。
-- `latest.json` 里的 URL 必须和最终上传到 GitHub Release 的资产名一致。上传的是 `Claude.Desktop.app.tar.gz`，URL 就写 `https://github.com/shehuiyao/claudedesktop/releases/download/vX.Y.Z/Claude.Desktop.app.tar.gz`；上传的是带空格文件名，URL 才需要写 `Claude%20Desktop.app.tar.gz`。
+- GitHub Release 资产名可以按稳定格式改成无空格版本，例如把构建产物复制为 `/tmp/Coding.Desktop.app.tar.gz` 后上传。
+- `latest.json` 里的 URL 必须和最终上传到 GitHub Release 的资产名一致。上传的是 `Coding.Desktop.app.tar.gz`，URL 就写 `https://github.com/shehuiyao/codingdesktop/releases/download/vX.Y.Z/Coding.Desktop.app.tar.gz`；上传的是带空格文件名，URL 才需要写 `Coding%20Desktop.app.tar.gz`。
 - 不要只靠模板猜文件名。文件名像设计稿里的导出切片名，实际上传什么，自动更新入口就必须指向什么。
 
 ## Release 上传文件
 
 - GitHub Release 必须同时上传 DMG、`.app.tar.gz` 更新包、`latest.json`。
 - DMG 方便用户手动安装，`.app.tar.gz` 和 `latest.json` 是 Tauri 自动更新需要的文件。
-- Release 使用的是本机 `gh` 登录态，不使用 `~/.claude-desktop/.github_token`。后者只是应用内反馈创建 GitHub Issue 的 token。
+- Release 使用的是本机 `gh` 登录态，不使用 `~/.coding-desktop/.github_token`。后者只是应用内反馈创建 GitHub Issue 的 token。
 - 遇到上传问题时先跑 `gh auth status`。如果显示 keyring 登录且 token scope 包含 `repo`，说明基础权限通常够用。
 - 如果 `gh release create` 或 `gh release upload` 上传大文件时长时间无输出，先用 `gh release view vX.Y.Z --json assets,isDraft` 查 Release 状态，不要重复创建。
 - 如果只看到 `latest.json` 上传成功，而 DMG / `.app.tar.gz` 一直不出现，优先判断为 `gh` 上传链路卡住。可以改用 GitHub 上传 API 直传：
@@ -29,8 +29,8 @@
     -H "Authorization: Bearer $(gh auth token)" \
     -H "Accept: application/vnd.github+json" \
     -H "Content-Type: application/gzip" \
-    --data-binary @/tmp/Claude.Desktop.app.tar.gz \
-    "https://uploads.github.com/repos/shehuiyao/claudedesktop/releases/<release_id>/assets?name=Claude.Desktop.app.tar.gz"
+    --data-binary @/tmp/Coding.Desktop.app.tar.gz \
+    "https://uploads.github.com/repos/shehuiyao/codingdesktop/releases/<release_id>/assets?name=Coding.Desktop.app.tar.gz"
   ```
 - DMG 同理把 `Content-Type` 改成 `application/x-apple-diskimage`，文件路径和 `name` 改成 DMG 文件名。
 - 直传成功后，再用 `gh release edit vX.Y.Z --draft=false` 发布草稿。
@@ -46,7 +46,7 @@
 - 如果 `curl` 验证 `latest.json` 失败，先区分是链接问题还是当前网络问题；沙箱内默认代理可能失败，可以用沙箱外直连验证：
   ```bash
   env -u http_proxy -u https_proxy -u all_proxy curl --noproxy '*' -sL \
-    https://github.com/shehuiyao/claudedesktop/releases/latest/download/latest.json
+    https://github.com/shehuiyao/codingdesktop/releases/latest/download/latest.json
   ```
 - 如果沙箱内验证慢，不代表发版失败。先以 `gh release view vX.Y.Z --json assets,isDraft` 为准确认 Release 状态，再单独验证 `latest.json`。
 - 左下角自动更新下载慢时，不要只看 Release 包大小。Tauri updater 是 Rust 层下载器，系统代理打开不一定等于它会自动走代理；表现可能是浏览器或 `curl -x http://127.0.0.1:7897` 几秒能下载完，但 App 内仍然很慢。

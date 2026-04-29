@@ -309,8 +309,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-desktop"
-version = "0.9.18"
+name = "coding-desktop"
+version = "0.9.19"
 dependencies = [
  "base64 0.22.1",
  "chrono",

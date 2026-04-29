@@ -337,7 +337,7 @@ export default function ChatView({ workingDir, onSwitchToTerminal }: ChatViewPro
             <div className="text-center">
               <div className="text-sm text-[var(--text-secondary)] mb-1">Start a conversation</div>
               <div className="text-[11px] text-[var(--text-muted)] mb-4">
-                Type a message below to chat with Claude
+                Type a message below to chat with your coding assistant
               </div>
               <button
                 onClick={async () => {

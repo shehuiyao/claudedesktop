@@ -1,16 +1,16 @@
 [package]
-name = "claude-desktop"
-version = "0.9.18"
-description = "Claude Code Desktop GUI"
+name = "coding-desktop"
+version = "0.9.19"
+description = "Coding Desktop GUI"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "claude_desktop_lib"
+name = "coding_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "claude-desktop"
+name = "coding-desktop"
 path = "src/main.rs"
 
 [build-dependencies]

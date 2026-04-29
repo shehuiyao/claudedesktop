@@ -1,4 +1,4 @@
-# Claude Code Desktop
+# Coding Desktop
 
 一个为 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 和 [Gemini CLI](https://github.com/google-gemini/gemini-cli) 打造的桌面 GUI 客户端，基于 Tauri v2 + React + TypeScript 构建。
 
@@ -29,8 +29,8 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/shehuiyao/claudedesktop.git
-cd claudedesktop
+git clone https://github.com/shehuiyao/codingdesktop.git
+cd codingdesktop
 
 # 安装依赖
 npm install
@@ -51,7 +51,7 @@ npm run tauri build
 ## 项目结构
 
 ```
-claudedesktop/
+codingdesktop/
 ├── src/                    # React 前端
 │   ├── App.tsx             # 主应用组件
 │   ├── components/

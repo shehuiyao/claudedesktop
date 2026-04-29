@@ -200,10 +200,12 @@ pub fn resolve_tool_path(tool: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// 读取火山 API Key（存放在 ~/.claude-desktop/.volc_key）
+const APP_DATA_DIR: &str = ".coding-desktop";
+
+/// 读取火山 API Key（存放在 ~/.coding-desktop/.volc_key）
 fn read_volc_key() -> Option<String> {
     let home = dirs::home_dir()?;
-    let key_path = home.join(".claude-desktop").join(".volc_key");
+    let key_path = home.join(APP_DATA_DIR).join(".volc_key");
     std::fs::read_to_string(&key_path)
         .ok()
         .map(|s| s.trim().to_string())

@@ -3,14 +3,14 @@ set -e
 
 # Read version from tauri.conf.json
 VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
-echo "Building Claude Desktop v${VERSION}..."
+echo "Building Coding Desktop v${VERSION}..."
 
 # Build the app (Tauri builds .app + .dmg)
 npm run tauri build
 
-APP_PATH="src-tauri/target/release/bundle/macos/Claude Desktop.app"
-DMG_PATH="src-tauri/target/release/bundle/dmg/Claude Desktop_v${VERSION}.dmg"
-STAGING="/tmp/claude-dmg-staging"
+APP_PATH="src-tauri/target/release/bundle/macos/Coding Desktop.app"
+DMG_PATH="src-tauri/target/release/bundle/dmg/Coding Desktop_v${VERSION}.dmg"
+STAGING="/tmp/coding-dmg-staging"
 
 # Create staging directory
 rm -rf "$STAGING"
@@ -20,7 +20,7 @@ ln -s /Applications "$STAGING/Applications"
 
 # Create version changelog
 cat > "$STAGING/v${VERSION}-更新说明.md" << EOF
-# Claude Desktop v${VERSION}
+# Coding Desktop v${VERSION}
 
 ## 更新内容
 
@@ -37,7 +37,7 @@ cat > "$STAGING/v${VERSION}-更新说明.md" << EOF
 
 ## 安装方式
 
-将 Claude Desktop 拖入 Applications 文件夹即可。
+将 Coding Desktop 拖入 Applications 文件夹即可。
 
 ## 要求
 
@@ -50,7 +50,7 @@ rm -f "$DMG_PATH"
 rm -f src-tauri/target/release/bundle/dmg/*.dmg
 
 hdiutil create \
-  -volname "Claude Desktop v${VERSION}" \
+  -volname "Coding Desktop v${VERSION}" \
   -srcfolder "$STAGING" \
   -ov -format UDZO \
   "$DMG_PATH"

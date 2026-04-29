@@ -6,9 +6,14 @@ mod message_runner;
 use chat_runner::ChatProcess;
 use message_runner::PtySession;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
+
+const APP_DATA_DIR: &str = ".coding-desktop";
+const LEGACY_APP_DATA_DIR: &str = ".claude-desktop";
+const FEEDBACK_REPO: &str = "shehuiyao/codingdesktop";
 
 #[derive(serde::Deserialize)]
 struct LaunchpadProjectProbe {
@@ -39,6 +44,49 @@ struct AppState {
     sessions: Mutex<HashMap<String, PtySession>>,
     chats: Mutex<HashMap<String, ChatProcess>>,
     next_id: Mutex<u32>,
+}
+
+fn app_data_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    Ok(home.join(APP_DATA_DIR))
+}
+
+fn migrate_app_data_dir() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let legacy_dir = home.join(LEGACY_APP_DATA_DIR);
+    let data_dir = home.join(APP_DATA_DIR);
+
+    if !legacy_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("创建新数据目录失败: {}", e))?;
+        return Ok(());
+    }
+
+    copy_dir_missing(&legacy_dir, &data_dir)
+}
+
+fn copy_dir_missing(from: &Path, to: &Path) -> Result<(), String> {
+    if !to.exists() {
+        std::fs::create_dir_all(to)
+            .map_err(|e| format!("创建迁移目录失败: {}", e))?;
+    }
+
+    for entry in std::fs::read_dir(from)
+        .map_err(|e| format!("读取旧数据目录失败: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("读取旧数据项失败: {}", e))?;
+        let source_path = entry.path();
+        let target_path = to.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_dir_missing(&source_path, &target_path)?;
+        } else if !target_path.exists() {
+            std::fs::copy(&source_path, &target_path)
+                .map_err(|e| format!("迁移文件失败: {}", e))?;
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -1223,8 +1271,7 @@ struct FeedbackEntry {
 /// 提交反馈，保存到本地并创建 GitHub Issue
 #[tauri::command]
 fn submit_feedback(content: String) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let data_dir = home.join(".claude-desktop");
+    let data_dir = app_data_dir()?;
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| format!("创建目录失败: {}", e))?;
@@ -1258,9 +1305,9 @@ fn submit_feedback(content: String) -> Result<(), String> {
         };
         let body = format!("## 用户反馈\n\n{}\n\n---\n*提交时间: {}*", content, now.to_rfc3339());
         let _ = reqwest::blocking::Client::new()
-            .post("https://api.github.com/repos/shehuiyao/claudedesktop/issues")
+            .post(format!("https://api.github.com/repos/{}/issues", FEEDBACK_REPO))
             .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "claude-desktop")
+            .header("User-Agent", "coding-desktop")
             .header("Accept", "application/vnd.github+json")
             .json(&serde_json::json!({
                 "title": title,
@@ -1276,8 +1323,7 @@ fn submit_feedback(content: String) -> Result<(), String> {
 /// 获取所有反馈
 #[tauri::command]
 fn get_feedbacks() -> Result<Vec<FeedbackEntry>, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let feedback_file = home.join(".claude-desktop").join("feedback.json");
+    let feedback_file = app_data_dir()?.join("feedback.json");
     if !feedback_file.exists() {
         return Ok(Vec::new());
     }
@@ -1297,8 +1343,7 @@ struct SkillUsageMap {
 /// 记录技能使用一次
 #[tauri::command]
 fn record_skill_usage(skill_name: String) -> Result<u32, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let data_dir = home.join(".claude-desktop");
+    let data_dir = app_data_dir()?;
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| format!("创建目录失败: {}", e))?;
@@ -1325,8 +1370,7 @@ fn record_skill_usage(skill_name: String) -> Result<u32, String> {
 /// 获取所有技能的使用次数
 #[tauri::command]
 fn get_skill_usage() -> Result<HashMap<String, u32>, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let usage_file = home.join(".claude-desktop").join("skill_usage.json");
+    let usage_file = app_data_dir()?.join("skill_usage.json");
     if !usage_file.exists() {
         return Ok(HashMap::new());
     }
@@ -1756,6 +1800,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|_| {
+            if let Err(error) = migrate_app_data_dir() {
+                eprintln!("迁移 Coding Desktop 本地数据失败: {}", error);
+            }
+            Ok(())
+        })
         .manage(AppState {
             sessions: Mutex::new(HashMap::new()),
             chats: Mutex::new(HashMap::new()),

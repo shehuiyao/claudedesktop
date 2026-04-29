@@ -45,6 +45,12 @@
   --border-color: #21262d;
   --border-subtle: #1b1f24;
   --shadow-color: rgba(0, 0, 0, 0.4);
+  --launchpad-card-bg: linear-gradient(180deg, rgba(22, 27, 34, 0.96), rgba(13, 17, 23, 0.98));
+  --activity-border: rgba(255, 255, 255, 0.05);
+  --activity-level-1: #0e4429;
+  --activity-level-2: #006d32;
+  --activity-level-3: #26a641;
+  --activity-level-4: #56d364;
 
   --font-sans: -apple-system, BlinkMacSystemFont, system-ui,
     'Segoe UI', Roboto, 'Helvetica Neue', Arial,
@@ -74,6 +80,12 @@
   --border-color: #d0d7de;
   --border-subtle: #d8dee4;
   --shadow-color: rgba(31, 35, 40, 0.15);
+  --launchpad-card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 248, 250, 0.98));
+  --activity-border: rgba(31, 35, 40, 0.08);
+  --activity-level-1: #aceebb;
+  --activity-level-2: #6fdd8b;
+  --activity-level-3: #2da44e;
+  --activity-level-4: #116329;
 }
 
 body {

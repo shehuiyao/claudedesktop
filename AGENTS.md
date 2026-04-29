@@ -1,4 +1,4 @@
-# Claude Desktop - 项目规则
+# Coding Desktop - 项目规则
 
 ## 语言
 - 始终使用中文与用户交流，包括代码注释中的说明性文字
@@ -82,29 +82,30 @@ chore: bump version                   ← 英文、太模糊
 - `src-tauri/tauri.conf.json` → `"version"`
 - `src/components/StatusBar.tsx` → `APP_VERSION`
 
-> 说明：软件展示名、内部包名、Bundle Identifier 和数据目录当前统一沿用 `Claude Desktop` / `claude-desktop` / `~/.claude-desktop`。如果未来改名，必须同步评估数据迁移和自动更新兼容。
+> 说明：软件展示名、内部包名、Bundle Identifier 和数据目录已统一为 `Coding Desktop` / `coding-desktop` / `com.coding-desktop.app` / `~/.coding-desktop`。新版启动时会把旧目录 `~/.claude-desktop` 中的数据迁移到新目录。
 
 ### 构建环境变量
 ```bash
-GITHUB_FEEDBACK_TOKEN="$(cat ~/.claude-desktop/.github_token)" \
+GITHUB_FEEDBACK_TOKEN="$(cat ~/.coding-desktop/.github_token)" \
 TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/key.key)" \
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="tauri" \
 npm run tauri build
 ```
 - `GITHUB_FEEDBACK_TOKEN`：用户提交反馈时自动创建 GitHub Issue（不带则反馈仅保存本地）
-- Token 存放在 `~/.claude-desktop/.github_token`，需 fine-grained PAT，仅需 Issues 写权限
+- Token 存放在 `~/.coding-desktop/.github_token`，需 fine-grained PAT，仅需 Issues 写权限
 
 ### 构建产物
 - 构建产物目录：`src-tauri/target/release/bundle/`
-  - `macos/Claude Desktop.app`（应用本体）
-  - `macos/Claude Desktop.app.tar.gz`（更新包）
-  - `macos/Claude Desktop.app.tar.gz.sig`（签名文件）
-  - `dmg/Claude Desktop_X.Y.Z_aarch64.dmg`（安装镜像，可直接分发）
+  - `macos/Coding Desktop.app`（应用本体）
+  - `macos/Coding Desktop.app.tar.gz`（更新包）
+  - `macos/Coding Desktop.app.tar.gz.sig`（签名文件）
+  - `dmg/Coding Desktop_X.Y.Z_aarch64.dmg`（安装镜像，可直接分发）
 
 ### 发版注意事项
 - 以 `xy-release` 技能流程为准：确认版本号 → 更新版本 → 构建 → 检查 DMG → 提交 → 打 tag 并推送 → 生成 `latest.json` → 创建 GitHub Release → 验证。
-- `latest.json` 的下载 URL 和上传文件名必须读取真实构建产物，不要手写猜测文件名。尤其注意 `Claude Desktop.app.tar.gz` 文件名里有空格，不要误写成 `Claude.Desktop.app.tar.gz`。
+- `latest.json` 的下载 URL 和上传文件名必须读取真实构建产物，不要手写猜测文件名。尤其注意 `Coding Desktop.app.tar.gz` 文件名里有空格，不要误写成 `Coding.Desktop.app.tar.gz`。
 - GitHub Release 必须上传 DMG、`.app.tar.gz` 更新包和 `latest.json`，三者缺一都会影响安装或自动更新。
+- Release 创建后必须验证自动更新链路：`latest.json` 可访问、更新包 URL 可下载、下载速度在当前网络/系统代理下合理；如果涉及左下角更新慢，具体排查按 `docs/release-known-issues.md`。
 - 发版过程中遇到的新坑、修正后的命令、产物命名变化，都要同步回本项目文档；流程规则写入本文件和 `CLAUDE.md`，具体坑点写入 `docs/release-known-issues.md`。
 
 ### 首次设置签名密钥
