@@ -82,7 +82,7 @@ function MiniToggle({
       title={title}
     >
       <span
-        className="absolute top-[3px] h-3 w-3 rounded-full bg-white shadow-sm transition-transform"
+        className="absolute left-0 top-[3px] h-3 w-3 rounded-full bg-white shadow-sm transition-transform"
         style={{ transform: on ? "translateX(19px)" : "translateX(3px)" }}
       />
     </button>
