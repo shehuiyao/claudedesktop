@@ -1537,7 +1537,23 @@ python3 ~/.codex/scripts/skill_state.py \
 
 fn codex_home_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    if let Ok(value) = std::env::var("CODEX_HOME") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(expand_home_path(trimmed, &home));
+        }
+    }
     Ok(home.join(".codex"))
+}
+
+fn expand_home_path(value: &str, home: &Path) -> PathBuf {
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    PathBuf::from(value)
 }
 
 fn skill_usage_store_path() -> Result<PathBuf, String> {
@@ -1814,7 +1830,7 @@ fn migrate_legacy_skill_root(
 
 fn migrate_legacy_skills_to_codex() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let codex_dir = home.join(".codex");
+    let codex_dir = codex_home_dir()?;
     let codex_active = codex_dir.join("skills");
     let codex_disabled = codex_dir.join("skills.disabled");
     let conflict_root = codex_dir.join("skills.migrated-conflicts");
@@ -1963,27 +1979,99 @@ fn collect_skills_from_pair(
     active_root: &Path,
     disabled_root: &Path,
     source: &str,
+    can_toggle: bool,
     usage: &HashMap<String, SkillUsageEntry>,
 ) {
     let mut active_dirs = Vec::new();
     collect_skill_dirs(active_root, &mut active_dirs);
     for dir in active_dirs {
-        push_skill_info(skills, &dir, source, true, true, usage);
+        push_skill_info(skills, &dir, source, true, can_toggle, usage);
     }
 
     let mut disabled_dirs = Vec::new();
     collect_skill_dirs(disabled_root, &mut disabled_dirs);
     for dir in disabled_dirs {
-        push_skill_info(skills, &dir, source, false, true, usage);
+        push_skill_info(skills, &dir, source, false, can_toggle, usage);
     }
 }
 
+#[derive(Clone)]
+struct SkillRootPair {
+    active_root: PathBuf,
+    disabled_root: PathBuf,
+    source: &'static str,
+    can_toggle: bool,
+}
+
+fn push_unique_skill_root_pair(
+    pairs: &mut Vec<SkillRootPair>,
+    seen: &mut std::collections::HashSet<String>,
+    active_root: PathBuf,
+    disabled_root: PathBuf,
+    source: &'static str,
+    can_toggle: bool,
+) {
+    let key = active_root.to_string_lossy().to_string();
+    if seen.insert(key) {
+        pairs.push(SkillRootPair {
+            active_root,
+            disabled_root,
+            source,
+            can_toggle,
+        });
+    }
+}
+
+fn skill_root_pairs(project_path: Option<&str>) -> Result<Vec<SkillRootPair>, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let codex_dir = codex_home_dir()?;
+    let mut pairs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    push_unique_skill_root_pair(
+        &mut pairs,
+        &mut seen,
+        codex_dir.join("skills"),
+        codex_dir.join("skills.disabled"),
+        "codex",
+        true,
+    );
+
+    for (dir_name, source) in [(".agents", "agents"), (".claude", "claude")] {
+        let root = home.join(dir_name);
+        push_unique_skill_root_pair(
+            &mut pairs,
+            &mut seen,
+            root.join("skills"),
+            root.join("skills.disabled"),
+            source,
+            true,
+        );
+    }
+
+    if let Some(project_path) = project_path {
+        let trimmed = project_path.trim();
+        if !trimmed.is_empty() {
+            let project_root = expand_home_path(trimmed, &home);
+            push_unique_skill_root_pair(
+                &mut pairs,
+                &mut seen,
+                project_root.join(".agents").join("skills"),
+                project_root.join(".agents").join("skills.disabled"),
+                "agents",
+                false,
+            );
+        }
+    }
+
+    Ok(pairs)
+}
+
 #[tauri::command]
-fn list_skills() -> Result<Vec<SkillInfo>, String> {
+fn list_skills(project_path: Option<String>) -> Result<Vec<SkillInfo>, String> {
     ensure_skill_management_files()?;
     migrate_legacy_skills_to_codex()?;
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let codex_dir = home.join(".codex");
+    let codex_dir = codex_home_dir()?;
     let mut skills = Vec::new();
     let mut usage = read_skill_usage_store().skills;
     for (name, count) in read_legacy_skill_counts() {
@@ -1993,13 +2081,16 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
         });
     }
 
-    collect_skills_from_pair(
-        &mut skills,
-        &codex_dir.join("skills"),
-        &codex_dir.join("skills.disabled"),
-        "codex",
-        &usage,
-    );
+    for pair in skill_root_pairs(project_path.as_deref())? {
+        collect_skills_from_pair(
+            &mut skills,
+            &pair.active_root,
+            &pair.disabled_root,
+            pair.source,
+            pair.can_toggle,
+            &usage,
+        );
+    }
 
     // 插件技能：Codex 插件缓存中的 skills/ 子目录只读展示
     let mut plugin_dirs = Vec::new();
@@ -2034,11 +2125,11 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
 }
 
 fn known_skill_root_pairs() -> Result<Vec<(PathBuf, PathBuf)>, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(vec![(
-        home.join(".codex").join("skills"),
-        home.join(".codex").join("skills.disabled"),
-    )])
+    Ok(skill_root_pairs(None)?
+        .into_iter()
+        .filter(|pair| pair.can_toggle)
+        .map(|pair| (pair.active_root, pair.disabled_root))
+        .collect())
 }
 
 #[tauri::command]

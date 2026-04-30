@@ -230,7 +230,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
     setLoading(true);
     setError("");
     try {
-      const next = await invoke<SkillInfo[]>("list_skills");
+      const next = await invoke<SkillInfo[]>("list_skills", { projectPath: workingDir ?? null });
       setSkills(next);
     } catch (err) {
       setError(String(err));
@@ -238,7 +238,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workingDir]);
 
   const loadProjectDisabled = useCallback(() => {
     if (!workingDir) return;
