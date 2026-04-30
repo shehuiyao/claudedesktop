@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface HistoryEntry {
@@ -15,7 +15,6 @@ export interface GroupedHistory {
 }
 
 const HISTORY_VISIBLE_MONTHS = 1;
-const HISTORY_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 /** Parse a timestamp that may be an epoch-ms number string or an ISO date string. */
 function parseTimestamp(ts: string): number {
@@ -82,7 +81,7 @@ export function useHistory() {
   const [error, setError] = useState<string | null>(null);
   const refreshingRef = useRef(false);
 
-  async function fetchHistory(silent = false) {
+  const fetchHistory = useCallback(async (silent = false) => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     if (!silent) {
@@ -98,31 +97,11 @@ export function useHistory() {
       setLoading(false);
       refreshingRef.current = false;
     }
-  }
+  }, []);
 
   useEffect(() => {
     fetchHistory();
-
-    const intervalId = window.setInterval(() => {
-      if (!document.hidden) {
-        fetchHistory(true);
-      }
-    }, HISTORY_REFRESH_INTERVAL_MS);
-    const refreshWhenVisible = () => {
-      if (!document.hidden) {
-        fetchHistory(true);
-      }
-    };
-    const refreshOnFocus = () => fetchHistory(true);
-    window.addEventListener("focus", refreshOnFocus);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshOnFocus);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, []);
+  }, [fetchHistory]);
 
   return { history, loading, error, refetch: () => fetchHistory() };
 }

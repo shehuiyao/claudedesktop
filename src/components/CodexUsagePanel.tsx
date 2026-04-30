@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { invoke } from "@tauri-apps/api/core";
 
 type ViewMode = "day" | "week" | "month";
+type ChartMode = "line" | "scatter";
 
 interface CodexUsageItem {
   date: string;
   hour: number;
+  timestamp?: string;
   project: string;
   input: number;
   cached: number;
@@ -140,6 +142,17 @@ function formatActivityDateTitle(value: string) {
   return parseDate(value).toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
 }
 
+function formatEventTime(item: CodexUsageItem) {
+  const time = item.timestamp ? new Date(item.timestamp) : new Date(parseDate(item.date).getTime() + item.hour * 60 * 60 * 1000);
+  if (Number.isNaN(time.getTime())) return `${item.date} ${String(item.hour).padStart(2, "0")}:00`;
+  return time.toLocaleString("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function formatSourceLabel(path: string) {
   const normalized = path.replace(/\\/g, "/");
   const area = normalized.includes("/tmp/codex-subscription-home/.codex") ? "订阅隔离" : normalized.includes("/.codex/") ? "主目录" : "本地目录";
@@ -241,6 +254,21 @@ function makeLinePath(points: Bucket[], key: "total" | "output" | "avgDuration",
   }).join(" ");
 }
 
+function itemTimeValue(item: CodexUsageItem) {
+  const parsed = item.timestamp ? new Date(item.timestamp).getTime() : NaN;
+  if (Number.isFinite(parsed)) return parsed;
+  return parseDate(item.date).getTime() + item.hour * 60 * 60 * 1000;
+}
+
+function rangeTimeFor(mode: ViewMode, selectedDate: string) {
+  const [startDate, endDate] = rangeFor(mode, selectedDate);
+  const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+  return [start.getTime(), end.getTime()] as const;
+}
+
 function ChartTooltip({
   x,
   y,
@@ -260,6 +288,99 @@ function ChartTooltip({
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function ScatterUsageChart({
+  items,
+  mode,
+  selectedDate,
+}: {
+  items: CodexUsageItem[];
+  mode: ViewMode;
+  selectedDate: string;
+}) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [start, end] = rangeTimeFor(mode, selectedDate);
+  const width = 700;
+  const height = 210;
+  const baseY = 252;
+  const max = Math.max(...items.map((item) => item.total), 1);
+  const sortedItems = useMemo(() => [...items].sort((a, b) => itemTimeValue(a) - itemTimeValue(b)), [items]);
+  const points = sortedItems.map((item) => {
+    const time = itemTimeValue(item);
+    const progress = end > start ? (time - start) / (end - start) : 0;
+    return {
+      item,
+      x: 42 + Math.min(Math.max(progress, 0), 1) * width,
+      y: baseY - (item.total / max) * height,
+    };
+  });
+  const hoverPoint = hoverIndex === null ? null : points[hoverIndex];
+  const guideLabels = mode === "day"
+    ? ["00:00", "06:00", "12:00", "18:00", "24:00"]
+    : Array.from({ length: Math.min(6, Math.max(2, points.length || 6)) }, (_, index) => {
+        const tick = new Date(start + ((end - start) * index) / (Math.min(6, Math.max(2, points.length || 6)) - 1));
+        return tick.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+      });
+
+  return (
+    <div className="relative" onMouseLeave={() => setHoverIndex(null)}>
+      <svg viewBox="0 0 790 310" className="w-full min-h-[220px]">
+        <line x1="38" y1="252" x2="760" y2="252" stroke="var(--border-color)" />
+        {guideLabels.map((label, index) => {
+          const x = 42 + (index / Math.max(guideLabels.length - 1, 1)) * width;
+          return (
+            <g key={`${label}-${index}`}>
+              <line x1={x} y1="36" x2={x} y2="252" stroke="var(--border-subtle)" strokeDasharray="3 8" />
+              <text x={x} y="292" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{label}</text>
+            </g>
+          );
+        })}
+        {hoverPoint && (
+          <line x1={hoverPoint.x} y1="34" x2={hoverPoint.x} y2="252" stroke="var(--border-color)" strokeDasharray="4 4" />
+        )}
+        {points.length === 0 ? (
+          <text x="400" y="150" textAnchor="middle" fill="var(--text-muted)" fontSize="12">没有可绘制的事件</text>
+        ) : points.map((point, index) => {
+          const isHover = hoverIndex === index;
+          const radius = isHover ? 6 : Math.min(5, Math.max(3, 2.5 + (point.item.output / Math.max(point.item.total, 1)) * 4));
+          return (
+            <g key={`${point.item.timestamp ?? point.item.date}-${point.item.project}-${index}`}>
+              <circle
+                cx={point.x}
+                cy={point.y}
+                r="10"
+                fill="transparent"
+                onMouseEnter={() => setHoverIndex(index)}
+              />
+              <circle
+                cx={point.x}
+                cy={point.y}
+                r={radius}
+                fill={isHover ? "var(--accent-cyan)" : "var(--bg-secondary)"}
+                stroke="var(--accent-cyan)"
+                strokeWidth="2"
+                opacity={isHover ? 1 : 0.82}
+                onMouseEnter={() => setHoverIndex(index)}
+              />
+            </g>
+          );
+        })}
+      </svg>
+      {hoverPoint && (
+        <ChartTooltip x={hoverPoint.x} y={Math.max(52, hoverPoint.y)}>
+          <div className="mb-1 font-medium text-[var(--text-primary)]">{formatEventTime(hoverPoint.item)}</div>
+          <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-1">
+            <span>项目</span><span className="max-w-[140px] truncate text-right text-[var(--text-primary)]" title={hoverPoint.item.project}>{hoverPoint.item.project}</span>
+            <span>总量</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.item.total)}</span>
+            <span>输入</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.item.input)}</span>
+            <span>缓存</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.item.cached)}</span>
+            <span>输出</span><span className="text-right text-[var(--text-primary)] tabular-nums">{formatTokens(hoverPoint.item.output)}</span>
+          </div>
+        </ChartTooltip>
+      )}
     </div>
   );
 }
@@ -501,6 +622,7 @@ function ActivityHeatmap({ days }: { days: ActivityDay[] }) {
 export default function CodexUsagePanel() {
   const [report, setReport] = useState<CodexUsageReport>(EMPTY_REPORT);
   const [mode, setMode] = useState<ViewMode>("day");
+  const [chartMode, setChartMode] = useState<ChartMode>("line");
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [selectedProject, setSelectedProject] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -660,19 +782,45 @@ export default function CodexUsagePanel() {
         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.9fr] gap-4 mb-4">
           <div className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 p-4 min-w-0">
             <div className="flex items-center justify-between gap-3 mb-3">
-              <h2 className="text-sm font-medium text-[var(--text-primary)]">用量折线</h2>
-              <div className="flex shrink-0 items-center gap-3 text-[11px] text-[var(--text-secondary)]">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-5 rounded-full bg-[var(--accent-cyan)]" />
-                  总量
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-0 w-5 border-t-2 border-dashed border-[var(--accent-orange)]" />
-                  输出
-                </span>
+              <div className="min-w-0">
+                <h2 className="text-sm font-medium text-[var(--text-primary)]">{chartMode === "line" ? "用量折线" : "对话散点"}</h2>
+                <div className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  {chartMode === "line" ? "按时间段聚合" : "每个点是一条请求事件"}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {chartMode === "line" && (
+                  <div className="hidden sm:flex items-center gap-3 text-[11px] text-[var(--text-secondary)]">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-2 w-5 rounded-full bg-[var(--accent-cyan)]" />
+                      总量
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-0 w-5 border-t-2 border-dashed border-[var(--accent-orange)]" />
+                      输出
+                    </span>
+                  </div>
+                )}
+                <div className="inline-flex rounded-xl border border-[var(--border-color)] overflow-hidden bg-[var(--bg-primary)]">
+                  {(["line", "scatter"] as ChartMode[]).map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => setChartMode(item)}
+                      className={`h-8 px-3 text-xs cursor-pointer transition-colors ${
+                        chartMode === item ? "bg-[var(--accent-cyan)] text-[#0d1117]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                      }`}
+                    >
+                      {item === "line" ? "折线" : "散点"}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-            <UsageChart points={buckets} />
+            {chartMode === "line" ? (
+              <UsageChart points={buckets} />
+            ) : (
+              <ScatterUsageChart items={filteredUsage} mode={mode} selectedDate={selectedDate} />
+            )}
           </div>
 
           <div className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 p-4 min-w-0">

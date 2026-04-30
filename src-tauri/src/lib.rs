@@ -6,6 +6,7 @@ mod message_runner;
 use chat_runner::ChatProcess;
 use message_runner::PtySession;
 use std::collections::HashMap;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -30,13 +31,33 @@ fn log_perf(command: &str, started: Instant, status: &str, detail: &str) {
     } else {
         format!(" {}", detail)
     };
-    eprintln!(
+    let line = format!(
         "[perf] command={} status={} elapsed_ms={}{}",
         command,
         status,
         started.elapsed().as_millis(),
         detail_suffix
     );
+    eprintln!("{}", line);
+
+    if let Ok(data_dir) = app_data_dir() {
+        let log_dir = data_dir.join("logs");
+        if std::fs::create_dir_all(&log_dir).is_ok() {
+            let log_path = log_dir.join("perf.log");
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+            {
+                let _ = writeln!(
+                    file,
+                    "{} {}",
+                    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+                    line
+                );
+            }
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -1727,6 +1748,115 @@ fn collect_skill_dirs(root: &Path, result: &mut Vec<PathBuf>) {
     }
 }
 
+fn unique_conflict_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("skill");
+
+    for index in 1..1000 {
+        let candidate = parent.join(format!("{}-{}", name, index));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    parent.join(format!(
+        "{}-{}",
+        name,
+        chrono::Utc::now().timestamp_millis()
+    ))
+}
+
+fn move_legacy_skill_dir(
+    source_dir: &Path,
+    target_root: &Path,
+    conflict_root: &Path,
+) -> Result<(), String> {
+    let Some(name) = source_dir.file_name() else {
+        return Ok(());
+    };
+
+    let target = target_root.join(name);
+    let final_target = if target.exists() {
+        unique_conflict_path(&conflict_root.join(name))
+    } else {
+        target
+    };
+
+    if let Some(parent) = final_target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建技能迁移目录失败: {}", e))?;
+    }
+
+    std::fs::rename(source_dir, &final_target).map_err(|e| format!("迁移旧技能目录失败: {}", e))?;
+    Ok(())
+}
+
+fn migrate_legacy_skill_root(
+    source_root: &Path,
+    target_root: &Path,
+    conflict_root: &Path,
+) -> Result<(), String> {
+    let mut dirs = Vec::new();
+    collect_skill_dirs(source_root, &mut dirs);
+    for dir in dirs {
+        if dir.exists() {
+            move_legacy_skill_dir(&dir, target_root, conflict_root)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_skills_to_codex() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let codex_dir = home.join(".codex");
+    let codex_active = codex_dir.join("skills");
+    let codex_disabled = codex_dir.join("skills.disabled");
+    let conflict_root = codex_dir.join("skills.migrated-conflicts");
+
+    for legacy_name in ["agents", "claude"] {
+        let legacy_dir = home.join(format!(".{}", legacy_name));
+        migrate_legacy_skill_root(
+            &legacy_dir.join("skills"),
+            &codex_active,
+            &conflict_root.join(format!("{}-enabled", legacy_name)),
+        )?;
+        migrate_legacy_skill_root(
+            &legacy_dir.join("skills.disabled"),
+            &codex_disabled,
+            &conflict_root.join(format!("{}-disabled", legacy_name)),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn collect_plugin_skill_dirs(root: &Path, result: &mut Vec<PathBuf>) {
+    if !root.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some("skills") {
+            collect_skill_dirs(&path, result);
+            continue;
+        }
+        collect_plugin_skill_dirs(&path, result);
+    }
+}
+
 fn read_skill_usage_store() -> SkillUsageStore {
     let Ok(path) = skill_usage_store_path() else {
         return SkillUsageStore::default();
@@ -1851,10 +1981,9 @@ fn collect_skills_from_pair(
 #[tauri::command]
 fn list_skills() -> Result<Vec<SkillInfo>, String> {
     ensure_skill_management_files()?;
+    migrate_legacy_skills_to_codex()?;
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
     let codex_dir = home.join(".codex");
-    let agents_dir = home.join(".agents");
-    let claude_dir = home.join(".claude");
     let mut skills = Vec::new();
     let mut usage = read_skill_usage_store().skills;
     for (name, count) in read_legacy_skill_counts() {
@@ -1871,74 +2000,27 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
         "codex",
         &usage,
     );
-    collect_skills_from_pair(
-        &mut skills,
-        &agents_dir.join("skills"),
-        &agents_dir.join("skills.disabled"),
-        "agents",
-        &usage,
-    );
-    collect_skills_from_pair(
-        &mut skills,
-        &claude_dir.join("skills"),
-        &claude_dir.join("skills.disabled"),
-        "claude",
-        &usage,
-    );
 
-    // 插件技能：读取每个插件下的 skills/ 子目录
-    let plugins_file = claude_dir.join("plugins").join("installed_plugins.json");
-    if plugins_file.exists() {
-        if let Ok(content) = std::fs::read_to_string(&plugins_file) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(plugins) = json.get("plugins").and_then(|p| p.as_object()) {
-                    for (_key, val) in plugins {
-                        if let Some(arr) = val.as_array() {
-                            if let Some(first) = arr.first() {
-                                if let Some(install_path) =
-                                    first.get("installPath").and_then(|p| p.as_str())
-                                {
-                                    let skills_path =
-                                        std::path::Path::new(install_path).join("skills");
-                                    if skills_path.exists() {
-                                        if let Ok(entries) = std::fs::read_dir(&skills_path) {
-                                            for entry in entries.flatten() {
-                                                let path = entry.path();
-                                                if path.is_dir() {
-                                                    if let Some(name) = entry.file_name().to_str() {
-                                                        let description =
-                                                            parse_skill_description(&path);
-                                                        let usage_entry = usage
-                                                            .get(name)
-                                                            .cloned()
-                                                            .unwrap_or_default();
-                                                        skills.push(SkillInfo {
-                                                            id: path.to_string_lossy().to_string(),
-                                                            name: name.to_string(),
-                                                            source: "plugin".to_string(),
-                                                            description,
-                                                            category: "official".to_string(),
-                                                            path: path
-                                                                .to_string_lossy()
-                                                                .to_string(),
-                                                            enabled: true,
-                                                            can_toggle: false,
-                                                            usage_count: usage_entry.count,
-                                                            first_used_at: usage_entry
-                                                                .first_used_at,
-                                                            last_used_at: usage_entry.last_used_at,
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    // 插件技能：Codex 插件缓存中的 skills/ 子目录只读展示
+    let mut plugin_dirs = Vec::new();
+    collect_plugin_skill_dirs(&codex_dir.join("plugins").join("cache"), &mut plugin_dirs);
+    for path in plugin_dirs {
+        if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+            let description = parse_skill_description(&path);
+            let usage_entry = usage.get(name).cloned().unwrap_or_default();
+            skills.push(SkillInfo {
+                id: path.to_string_lossy().to_string(),
+                name: name.to_string(),
+                source: "plugin".to_string(),
+                description,
+                category: "official".to_string(),
+                path: path.to_string_lossy().to_string(),
+                enabled: true,
+                can_toggle: false,
+                usage_count: usage_entry.count,
+                first_used_at: usage_entry.first_used_at,
+                last_used_at: usage_entry.last_used_at,
+            });
         }
     }
 
@@ -1953,20 +2035,10 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
 
 fn known_skill_root_pairs() -> Result<Vec<(PathBuf, PathBuf)>, String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(vec![
-        (
-            home.join(".codex").join("skills"),
-            home.join(".codex").join("skills.disabled"),
-        ),
-        (
-            home.join(".agents").join("skills"),
-            home.join(".agents").join("skills.disabled"),
-        ),
-        (
-            home.join(".claude").join("skills"),
-            home.join(".claude").join("skills.disabled"),
-        ),
-    ])
+    Ok(vec![(
+        home.join(".codex").join("skills"),
+        home.join(".codex").join("skills.disabled"),
+    )])
 }
 
 #[tauri::command]
@@ -2406,7 +2478,26 @@ fn get_usage_stats() -> Result<UsageStats, String> {
 
 #[tauri::command]
 fn get_codex_usage() -> Result<codex_usage::CodexUsageReport, String> {
-    codex_usage::collect_codex_usage()
+    let started = Instant::now();
+    let result = codex_usage::collect_codex_usage();
+    let detail = result
+        .as_ref()
+        .map(|report| {
+            format!(
+                "usage={} speed={} roots={}",
+                report.usage_len(),
+                report.speed_len(),
+                report.roots_len()
+            )
+        })
+        .unwrap_or_default();
+    log_perf(
+        "get_codex_usage",
+        started,
+        if result.is_ok() { "ok" } else { "error" },
+        &detail,
+    );
+    result
 }
 
 #[tauri::command]
@@ -2849,6 +2940,9 @@ pub fn run() {
             }
             if let Err(error) = ensure_skill_management_files() {
                 eprintln!("初始化 Skill 管理文件失败: {}", error);
+            }
+            if let Err(error) = migrate_legacy_skills_to_codex() {
+                eprintln!("迁移旧 Skill 目录失败: {}", error);
             }
             Ok(())
         })

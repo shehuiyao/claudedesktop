@@ -3,6 +3,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
+
+const HISTORY_CACHE_VERSION: u32 = 1;
+const HISTORY_CACHE_FILE_NAME: &str = "codex-history-cache.json";
+static HISTORY_CACHE: OnceLock<Mutex<CodexHistoryCache>> = OnceLock::new();
 
 /// Deserialize a timestamp that may be a JSON number (epoch ms) or a string.
 /// Always produces a string suitable for JavaScript's `new Date()`.
@@ -69,11 +75,91 @@ fn codex_sub_dir() -> PathBuf {
 
 fn codex_roots() -> Vec<(PathBuf, String)> {
     let mut roots = Vec::new();
+    let mut seen = HashSet::new();
     if let Some(d) = codex_dir() {
-        roots.push((d, "codex".to_string()));
+        if seen.insert(d.to_string_lossy().to_string()) {
+            roots.push((d, "codex".to_string()));
+        }
     }
-    roots.push((codex_sub_dir(), "codex_sub".to_string()));
+    let sub = codex_sub_dir();
+    if seen.insert(sub.to_string_lossy().to_string()) {
+        roots.push((sub, "codex_sub".to_string()));
+    }
     roots
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct CodexHistoryCache {
+    version: u32,
+    files: HashMap<String, CachedHistorySummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CachedHistorySummary {
+    size: u64,
+    modified_ms: u64,
+    entry: Option<HistoryEntry>,
+}
+
+fn history_cache_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| {
+        home.join(".coding-desktop")
+            .join("cache")
+            .join(HISTORY_CACHE_FILE_NAME)
+    })
+}
+
+fn read_history_cache() -> CodexHistoryCache {
+    let Some(path) = history_cache_path() else {
+        return CodexHistoryCache::default();
+    };
+    let Ok(content) = fs::read_to_string(path) else {
+        return CodexHistoryCache::default();
+    };
+    let Ok(cache) = serde_json::from_str::<CodexHistoryCache>(&content) else {
+        return CodexHistoryCache::default();
+    };
+    if cache.version == HISTORY_CACHE_VERSION {
+        cache
+    } else {
+        CodexHistoryCache::default()
+    }
+}
+
+fn history_cache() -> &'static Mutex<CodexHistoryCache> {
+    HISTORY_CACHE.get_or_init(|| Mutex::new(read_history_cache()))
+}
+
+fn write_history_cache(cache: &CodexHistoryCache) {
+    let Some(path) = history_cache_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(content) = serde_json::to_vec(cache) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, content).is_ok() {
+        let _ = fs::rename(tmp, path);
+    }
+}
+
+fn file_signature(path: &Path) -> Option<(u64, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis()
+        .try_into()
+        .ok()?;
+    Some((metadata.len(), modified_ms))
 }
 
 /// Convert a project path like `/Users/foo/bar` to its slug `-Users-foo-bar`.
@@ -311,11 +397,7 @@ fn read_codex_history_prompts(root: &Path) -> HashMap<String, CodexPromptInfo> {
     prompts
 }
 
-fn read_codex_session_summary(
-    path: &PathBuf,
-    tool: &str,
-    prompt_info: Option<&CodexPromptInfo>,
-) -> Option<HistoryEntry> {
+fn read_codex_session_summary(path: &PathBuf, tool: &str) -> Option<HistoryEntry> {
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
     let fallback_id = path
@@ -366,21 +448,30 @@ fn read_codex_session_summary(
         }
     }
 
-    if session_id.is_none() && prompt_info.is_none() && last_user_display.is_none() {
+    if session_id.is_none() && last_user_display.is_none() {
         return None;
     }
 
     Some(HistoryEntry {
-        display: prompt_info
-            .map(|info| info.text.clone())
-            .or(last_user_display),
-        timestamp: prompt_info
-            .and_then(|info| info.timestamp.clone())
-            .or(timestamp),
+        display: last_user_display,
+        timestamp,
         project: cwd,
         session_id,
         tool: Some(tool.to_string()),
     })
+}
+
+fn apply_prompt_info(
+    mut entry: HistoryEntry,
+    prompt_info: Option<&CodexPromptInfo>,
+) -> HistoryEntry {
+    if let Some(info) = prompt_info {
+        entry.display = Some(info.text.clone());
+        if info.timestamp.is_some() {
+            entry.timestamp = info.timestamp.clone();
+        }
+    }
+    entry
 }
 
 fn upsert_codex_entry(entries: &mut HashMap<String, HistoryEntry>, entry: HistoryEntry) {
@@ -411,6 +502,12 @@ fn upsert_codex_entry(entries: &mut HashMap<String, HistoryEntry>, entry: Histor
 
 fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
     let mut entries_by_id: HashMap<String, HistoryEntry> = HashMap::new();
+    let mut cache = history_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.version = HISTORY_CACHE_VERSION;
+    let mut seen_files = HashSet::new();
+    let mut cache_changed = false;
 
     for (codex, root_tool) in codex_roots() {
         let index_path = codex.join("session_index.jsonl");
@@ -449,16 +546,60 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
         let prompts = read_codex_history_prompts(&codex);
         for dir in codex_session_dirs(&codex) {
             for path in walk_jsonl_files(&dir) {
+                let cache_key = path.to_string_lossy().to_string();
+                seen_files.insert(cache_key.clone());
+                let Some((size, modified_ms)) = file_signature(&path) else {
+                    continue;
+                };
+
+                let summary = if let Some(cached) = cache.files.get(&cache_key) {
+                    if cached.size == size && cached.modified_ms == modified_ms {
+                        cached.entry.clone()
+                    } else {
+                        let entry = read_codex_session_summary(&path, &root_tool);
+                        cache.files.insert(
+                            cache_key.clone(),
+                            CachedHistorySummary {
+                                size,
+                                modified_ms,
+                                entry: entry.clone(),
+                            },
+                        );
+                        cache_changed = true;
+                        entry
+                    }
+                } else {
+                    let entry = read_codex_session_summary(&path, &root_tool);
+                    cache.files.insert(
+                        cache_key.clone(),
+                        CachedHistorySummary {
+                            size,
+                            modified_ms,
+                            entry: entry.clone(),
+                        },
+                    );
+                    cache_changed = true;
+                    entry
+                };
+
                 let session_id = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .and_then(extract_session_id_from_filename);
                 let prompt_info = session_id.as_ref().and_then(|id| prompts.get(id));
-                if let Some(summary) = read_codex_session_summary(&path, &root_tool, prompt_info) {
-                    upsert_codex_entry(&mut entries_by_id, summary);
+                if let Some(mut summary) = summary {
+                    summary.tool = Some(root_tool.clone());
+                    upsert_codex_entry(&mut entries_by_id, apply_prompt_info(summary, prompt_info));
                 }
             }
         }
+    }
+
+    let before_retain = cache.files.len();
+    cache.files.retain(|path, _| seen_files.contains(path));
+    cache_changed = cache_changed || cache.files.len() != before_retain;
+    if cache_changed {
+        write_history_cache(&cache);
     }
 
     let mut entries: Vec<HistoryEntry> = entries_by_id.into_values().collect();
@@ -470,6 +611,21 @@ fn read_codex_history() -> Result<Vec<HistoryEntry>, String> {
 /// Find a Codex session file by scanning ~/.codex/sessions/ for a file ending with `{session_id}.jsonl`.
 fn find_codex_session_file(session_id: &str) -> Option<PathBuf> {
     let suffix = format!("{}.jsonl", session_id);
+    let cache = history_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    for (path, cached) in cache.files.iter() {
+        let Some(entry) = cached.entry.as_ref() else {
+            continue;
+        };
+        if entry.session_id.as_deref() == Some(session_id) {
+            let path = PathBuf::from(path.as_str());
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
 
     for (root, _) in codex_roots() {
         for dir in codex_session_dirs(&root) {

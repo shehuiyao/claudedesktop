@@ -130,6 +130,7 @@ function App() {
       setActiveProject(null);
       setShowLaunchpad(false);
       setShowCodexUsage(false);
+      setShowSkills(false);
     }
   }, []);
 
@@ -179,6 +180,7 @@ function App() {
     setActiveProject(null);
     setShowLaunchpad(false);
     setShowCodexUsage(false);
+    setShowSkills(false);
     setTabs((prev) => {
       const tab = prev.find((t) => t.id === tabId);
       if (tab) setWorkingDir(tab.workingDir);
@@ -325,6 +327,7 @@ function App() {
       setActiveTabId(null);
       setShowLaunchpad(false);
       setShowCodexUsage(false);
+      setShowSkills(false);
     },
     [],
   );
@@ -343,6 +346,7 @@ function App() {
     setActiveProject(null);
     setShowLaunchpad(false);
     setShowCodexUsage(false);
+    setShowSkills(false);
   }, []);
 
   // 从历史记录恢复对话：先创建待选择启动方式的 tab，真正启动时再带上 --resume 参数
@@ -368,6 +372,7 @@ function App() {
     setActiveProject(null);
     setShowLaunchpad(false);
     setShowCodexUsage(false);
+    setShowSkills(false);
   }, []);
 
   // 创建 git worktree 并打开为新 tab
@@ -387,6 +392,7 @@ function App() {
       setActiveProject(null);
       setShowLaunchpad(false);
       setShowCodexUsage(false);
+      setShowSkills(false);
     } catch (e) {
       console.error("Failed to create worktree:", e);
       throw e;
@@ -396,7 +402,10 @@ function App() {
   const handleToggleLaunchpad = useCallback(() => {
     setShowLaunchpad((prev) => {
       const next = !prev;
-      if (next) setShowCodexUsage(false);
+      if (next) {
+        setShowCodexUsage(false);
+        setShowSkills(false);
+      }
       return next;
     });
   }, []);
@@ -404,7 +413,21 @@ function App() {
   const handleToggleCodexUsage = useCallback(() => {
     setShowCodexUsage((prev) => {
       const next = !prev;
-      if (next) setShowLaunchpad(false);
+      if (next) {
+        setShowLaunchpad(false);
+        setShowSkills(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleSkills = useCallback(() => {
+    setShowSkills((prev) => {
+      const next = !prev;
+      if (next) {
+        setShowLaunchpad(false);
+        setShowCodexUsage(false);
+      }
       return next;
     });
   }, []);
@@ -537,7 +560,7 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const showingTab = activeTabId !== null && activeTab !== undefined;
-  const isWorkspaceVisible = !showLaunchpad && !showCodexUsage;
+  const isWorkspaceVisible = !showLaunchpad && !showCodexUsage && !showSkills;
 
   // Welcome screen when nothing is selected
   const showWelcome = isWorkspaceVisible && !showingTab && !activeSessionId;
@@ -571,6 +594,8 @@ function App() {
                 ? "Project Launchpad"
                 : showCodexUsage
                 ? "Codex API Usage"
+                : showSkills
+                ? "Skills 使用看板"
                 : showingTab
                 ? activeTab.workingDir
                 : activeSessionId
@@ -632,6 +657,12 @@ function App() {
                 className={`absolute inset-0 ${showCodexUsage ? "block" : "hidden"}`}
               >
                 <CodexUsagePanel />
+              </div>
+
+              <div
+                className={`absolute inset-0 ${showSkills ? "block" : "hidden"}`}
+              >
+                <SkillsPanel onClose={() => setShowSkills(false)} workingDir={workingDir} />
               </div>
 
               {/* Mode picker - shown when tab is terminal mode but not yet activated */}
@@ -902,19 +933,13 @@ function App() {
             {/* File tree panel - right side */}
             {isWorkspaceVisible && showFileTree && workingDir && <FileTree rootPath={workingDir} />}
 
-            {/* Skills panel overlay */}
-            {isWorkspaceVisible && showSkills && (
-              <div className="w-[min(760px,48vw)] min-w-[520px] border-l border-[var(--border-subtle)] relative">
-                <SkillsPanel onClose={() => setShowSkills(false)} workingDir={workingDir} />
-              </div>
-            )}
           </div>
         </div>
       </div>
       <div className="flex">
         <StatusBar />
         <button
-          onClick={() => setShowSkills(!showSkills)}
+          onClick={handleToggleSkills}
           className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
             showSkills ? "text-[var(--accent-purple)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
           }`}

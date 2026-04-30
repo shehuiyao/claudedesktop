@@ -347,11 +347,11 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
   };
 
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-[radial-gradient(circle_at_top_left,rgba(188,140,255,0.09),transparent_30%),var(--bg-primary)]">
-      <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/95 px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
+    <div className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(188,140,255,0.09),transparent_30%),var(--bg-primary)]">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
+        <div className="mb-4 flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]/92 px-5 py-4">
           <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold text-[var(--text-primary)]">Skills 使用看板</h1>
+            <h1 className="truncate text-lg font-semibold text-[var(--text-primary)]">Skills 使用看板</h1>
             <div className="mt-1 truncate text-[11px] text-[var(--text-muted)]">
               本地账本：~/.codex/skill-usage.json
             </div>
@@ -381,9 +381,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
             </button>
           </div>
         </div>
-      </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <div className="mb-3 rounded-xl border border-[var(--accent-red)]/35 bg-[var(--accent-red)]/10 px-3 py-2 text-xs text-[var(--accent-red)]">
             {error}
