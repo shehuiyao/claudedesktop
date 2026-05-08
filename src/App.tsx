@@ -1,21 +1,22 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { lazy, Suspense, useState, useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Sidebar from "./components/Sidebar";
-import ChatArea from "./components/ChatArea";
-import LiveTerminal from "./components/LiveTerminal";
 import StatusBar from "./components/StatusBar";
-import FileTree from "./components/FileTree";
-import SkillsPanel from "./components/SkillsPanel";
 import BranchSwitcher from "./components/BranchSwitcher";
-import CommitHistory from "./components/CommitHistory";
-import BugTrackerPanel from "./components/BugTrackerPanel";
-import QuickActionsPanel from "./components/QuickActionsPanel";
 import TabBar, { type Tab, type CliTool, type CodexPermissionMode } from "./components/TabBar";
 import SplitDivider from "./components/SplitDivider";
-import LaunchpadPanel from "./components/LaunchpadPanel";
-import CodexUsagePanel from "./components/CodexUsagePanel";
+
+const BugTrackerPanel = lazy(() => import("./components/BugTrackerPanel"));
+const ChatArea = lazy(() => import("./components/ChatArea"));
+const CodexUsagePanel = lazy(() => import("./components/CodexUsagePanel"));
+const CommitHistory = lazy(() => import("./components/CommitHistory"));
+const FileTree = lazy(() => import("./components/FileTree"));
+const LaunchpadPanel = lazy(() => import("./components/LaunchpadPanel"));
+const LiveTerminal = lazy(() => import("./components/LiveTerminal"));
+const QuickActionsPanel = lazy(() => import("./components/QuickActionsPanel"));
+const SkillsPanel = lazy(() => import("./components/SkillsPanel"));
 
 const GIT_INFO_REFRESH_INTERVAL_MS = 30_000;
 
@@ -116,6 +117,14 @@ function BottomToolSwitch({ on }: { on: boolean }) {
         style={{ transform: on ? "translateX(14px)" : "translateX(2px)" }}
       />
     </span>
+  );
+}
+
+function PanelFallback({ label = "Loading..." }: { label?: string }) {
+  return (
+    <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">
+      {label}
+    </div>
   );
 }
 
@@ -752,23 +761,29 @@ function App() {
               onPointerMove={handleContentPointerMove}
               onPointerUp={handleContentPointerUp}
             >
-              <div
-                className={`absolute inset-0 ${showLaunchpad ? "block" : "hidden"}`}
-              >
-                <LaunchpadPanel />
-              </div>
+              {showLaunchpad && (
+                <div className="absolute inset-0">
+                  <Suspense fallback={<PanelFallback label="Loading Launchpad..." />}>
+                    <LaunchpadPanel />
+                  </Suspense>
+                </div>
+              )}
 
-              <div
-                className={`absolute inset-0 ${showCodexUsage ? "block" : "hidden"}`}
-              >
-                <CodexUsagePanel />
-              </div>
+              {showCodexUsage && (
+                <div className="absolute inset-0">
+                  <Suspense fallback={<PanelFallback label="Loading API usage..." />}>
+                    <CodexUsagePanel />
+                  </Suspense>
+                </div>
+              )}
 
-              <div
-                className={`absolute inset-0 ${showSkills ? "block" : "hidden"}`}
-              >
-                <SkillsPanel onClose={() => setShowSkills(false)} workingDir={workingDir} />
-              </div>
+              {showSkills && (
+                <div className="absolute inset-0">
+                  <Suspense fallback={<PanelFallback label="Loading Skills..." />}>
+                    <SkillsPanel onClose={() => setShowSkills(false)} workingDir={workingDir} />
+                  </Suspense>
+                </div>
+              )}
 
               {/* Mode picker - shown when tab is terminal mode but not yet activated */}
               {tabs
@@ -938,16 +953,18 @@ function App() {
                       style={{ display: visible ? "flex" : "none", ...posStyle }}
                     >
                       <div className="flex-1 overflow-hidden">
-                        <LiveTerminal
-                          workingDir={tab.workingDir}
-                          yolo={tab.yolo}
-                          tool={tab.tool}
-                          permissionMode={tab.permissionMode}
-                          resumeSessionId={tab.resumeSessionId}
-                          isActive={isWorkspaceVisible && isActive}
-                          onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
-                          onError={() => updateTabStatus(tab.id, "error")}
-                        />
+                        <Suspense fallback={<PanelFallback label="Loading terminal..." />}>
+                          <LiveTerminal
+                            workingDir={tab.workingDir}
+                            yolo={tab.yolo}
+                            tool={tab.tool}
+                            permissionMode={tab.permissionMode}
+                            resumeSessionId={tab.resumeSessionId}
+                            isActive={isWorkspaceVisible && isActive}
+                            onSessionStarted={(sessionId) => handleSessionStarted(tab.id, sessionId)}
+                            onError={() => updateTabStatus(tab.id, "error")}
+                          />
+                        </Suspense>
                       </div>
                     </div>
                   );
@@ -981,10 +998,12 @@ function App() {
                   className="absolute inset-0 flex flex-col overflow-hidden"
                   style={{ display: isWorkspaceVisible && !showingTab ? "flex" : "none" }}
                 >
-                  <ChatArea
-                    sessionId={activeSessionId}
-                    projectSlug={activeProject}
-                  />
+                  <Suspense fallback={<PanelFallback label="Loading session..." />}>
+                    <ChatArea
+                      sessionId={activeSessionId}
+                      projectSlug={activeProject}
+                    />
+                  </Suspense>
                 </div>
               )}
 
@@ -1018,25 +1037,35 @@ function App() {
 
             {/* Quick Actions panel - right side */}
             {isWorkspaceVisible && showQuickActions && workingDir && (
-              <QuickActionsPanel
-                workingDir={workingDir}
-                onClose={() => setShowQuickActions(false)}
-                onSendCommand={handleQuickActionCommand}
-              />
+              <Suspense fallback={null}>
+                <QuickActionsPanel
+                  workingDir={workingDir}
+                  onClose={() => setShowQuickActions(false)}
+                  onSendCommand={handleQuickActionCommand}
+                />
+              </Suspense>
             )}
 
             {/* Bug tracker panel - right side */}
             {isWorkspaceVisible && showBugTracker && workingDir && (
-              <BugTrackerPanel workingDir={workingDir} onClose={() => setShowBugTracker(false)} />
+              <Suspense fallback={null}>
+                <BugTrackerPanel workingDir={workingDir} onClose={() => setShowBugTracker(false)} />
+              </Suspense>
             )}
 
             {/* Commit history panel - right side */}
             {isWorkspaceVisible && showCommits && workingDir && (
-              <CommitHistory key={commitRefreshKey} workingDir={workingDir} onClose={() => setShowCommits(false)} />
+              <Suspense fallback={null}>
+                <CommitHistory key={commitRefreshKey} workingDir={workingDir} onClose={() => setShowCommits(false)} />
+              </Suspense>
             )}
 
             {/* File tree panel - right side */}
-            {isWorkspaceVisible && showFileTree && workingDir && <FileTree rootPath={workingDir} />}
+            {isWorkspaceVisible && showFileTree && workingDir && (
+              <Suspense fallback={null}>
+                <FileTree rootPath={workingDir} />
+              </Suspense>
+            )}
 
           </div>
         </div>

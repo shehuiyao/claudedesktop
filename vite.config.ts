@@ -7,6 +7,29 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          tauri: [
+            "@tauri-apps/api",
+            "@tauri-apps/plugin-dialog",
+            "@tauri-apps/plugin-process",
+            "@tauri-apps/plugin-updater",
+          ],
+          terminal: [
+            "@xterm/xterm",
+            "@xterm/addon-fit",
+            "@xterm/addon-unicode11",
+            "@xterm/addon-web-links",
+            "@xterm/addon-webgl",
+          ],
+          markdown: ["react-markdown", "remark-gfm"],
+        },
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

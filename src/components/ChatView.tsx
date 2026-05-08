@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+
+const MarkdownContent = lazy(() => import("./MarkdownContent"));
 
 interface ContentBlock {
   type: string;
@@ -302,7 +302,9 @@ export default function ChatView({ workingDir, onSwitchToTerminal }: ChatViewPro
     if (block.type === "text" && block.text) {
       return (
         <div key={blockKey} className="prose prose-invert prose-sm max-w-none text-[13px] leading-relaxed">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+          <Suspense fallback={<span className="whitespace-pre-wrap">{block.text}</span>}>
+            <MarkdownContent>{block.text}</MarkdownContent>
+          </Suspense>
         </div>
       );
     }

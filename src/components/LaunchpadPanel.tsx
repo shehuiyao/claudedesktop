@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import LiveTerminal from "./LiveTerminal";
+
+const LiveTerminal = lazy(() => import("./LiveTerminal"));
 
 interface LaunchpadProject {
   id: string;
@@ -826,35 +827,37 @@ export default function LaunchpadPanel() {
                   <div className="flex-1 px-4 py-3">
                     {state.expanded ? (
                       <div className="h-[280px] overflow-hidden rounded-2xl border border-[var(--border-color)] bg-[var(--bg-primary)]">
-                        <LiveTerminal
-                          key={`${project.id}-${state.runKey}`}
-                          workingDir={project.workingDir}
-                          startupCommand={project.startCommand}
-                          sessionLabel={project.name || getProjectName(project.workingDir) || "Command"}
-                          isActive={isVisibleProject}
-                          onSessionStarted={() => {
-                            setProjectRuntime(project.id, (current) => ({
-                              ...current,
-                              status: "running",
-                              expanded: true,
-                            }));
-                          }}
-                          onSessionExit={() => {
-                            setProjectRuntime(project.id, (current) => ({
-                              ...current,
-                              status: current.status === "error" ? "error" : "stopped",
-                              expanded: true,
-                            }));
-                          }}
-                          onError={(error) => {
-                            setProjectRuntime(project.id, (current) => ({
-                              ...current,
-                              status: "error",
-                              expanded: true,
-                              lastError: error,
-                            }));
-                          }}
-                        />
+                        <Suspense fallback={<div className="grid h-full place-items-center text-xs text-[var(--text-muted)]">Loading terminal...</div>}>
+                          <LiveTerminal
+                            key={`${project.id}-${state.runKey}`}
+                            workingDir={project.workingDir}
+                            startupCommand={project.startCommand}
+                            sessionLabel={project.name || getProjectName(project.workingDir) || "Command"}
+                            isActive={isVisibleProject}
+                            onSessionStarted={() => {
+                              setProjectRuntime(project.id, (current) => ({
+                                ...current,
+                                status: "running",
+                                expanded: true,
+                              }));
+                            }}
+                            onSessionExit={() => {
+                              setProjectRuntime(project.id, (current) => ({
+                                ...current,
+                                status: current.status === "error" ? "error" : "stopped",
+                                expanded: true,
+                              }));
+                            }}
+                            onError={(error) => {
+                              setProjectRuntime(project.id, (current) => ({
+                                ...current,
+                                status: "error",
+                                expanded: true,
+                                lastError: error,
+                              }));
+                            }}
+                          />
+                        </Suspense>
                       </div>
                     ) : (
                       <div className="flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-primary)]/70 px-6 text-center">

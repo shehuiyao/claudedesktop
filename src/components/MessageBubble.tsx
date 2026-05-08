@@ -1,10 +1,11 @@
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { lazy, Suspense } from "react";
 import type { ChatMessage } from "../hooks/useSession";
 
 interface MessageBubbleProps {
   message: ChatMessage;
 }
+
+const MarkdownContent = lazy(() => import("./MarkdownContent"));
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
   const { role, content } = message;
@@ -26,7 +27,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           <span className="whitespace-pre-wrap">{content}</span>
         ) : (
           <div className="prose-invert [&_pre]:bg-[var(--bg-primary)] [&_pre]:rounded [&_pre]:p-2 [&_pre]:overflow-x-auto [&_pre]:text-xs [&_code]:text-[var(--accent-green)] [&_code]:text-xs [&_a]:text-[var(--accent-blue)]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <Suspense fallback={<span className="whitespace-pre-wrap">{content}</span>}>
+              <MarkdownContent>{content}</MarkdownContent>
+            </Suspense>
           </div>
         )}
       </div>
