@@ -37,6 +37,8 @@ const SOURCE_LABELS: Record<string, string> = {
   plugin: "插件",
 };
 
+const SHOW_OVERVIEW_STORAGE_KEY = "coding-desktop.skills.showOverview";
+
 function formatCount(value: number) {
   if (value >= 10_000) return `${(value / 10_000).toFixed(1)} 万`;
   return new Intl.NumberFormat("zh-CN").format(value);
@@ -222,12 +224,16 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [projectDisabledSkills, setProjectDisabledSkills] = useState<Set<string>>(new Set());
+  const [showOverview, setShowOverview] = useState(() => {
+    return window.localStorage.getItem(SHOW_OVERVIEW_STORAGE_KEY) !== "false";
+  });
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [sort, setSort] = useState<SortMode>("usage");
 
-  const loadSkills = useCallback(async () => {
-    setLoading(true);
+  const loadSkills = useCallback(async (options?: { showLoading?: boolean }) => {
+    const showLoading = options?.showLoading ?? true;
+    if (showLoading) setLoading(true);
     setError("");
     try {
       const next = await invoke<SkillInfo[]>("list_skills", { projectPath: workingDir ?? null });
@@ -236,7 +242,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
       setError(String(err));
       setSkills([]);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [workingDir]);
 
@@ -248,12 +254,16 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
   }, [workingDir]);
 
   useEffect(() => {
-    loadSkills();
+    loadSkills({ showLoading: true });
   }, [loadSkills]);
 
   useEffect(() => {
     loadProjectDisabled();
   }, [loadProjectDisabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SHOW_OVERVIEW_STORAGE_KEY, String(showOverview));
+  }, [showOverview]);
 
   const chartSkills = useMemo(() => uniqueByName(skills), [skills]);
 
@@ -308,7 +318,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
         skillPath: skill.path,
         enabled: !skill.enabled,
       });
-      await loadSkills();
+      await loadSkills({ showLoading: false });
     } catch (err) {
       setError(String(err));
     }
@@ -334,7 +344,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
     setError("");
     try {
       await invoke<number>("sync_skill_enabled_fields");
-      await loadSkills();
+      await loadSkills({ showLoading: false });
     } catch (err) {
       setError(String(err));
     } finally {
@@ -357,6 +367,14 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <div className="mr-1 flex items-center gap-1.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-2 py-1" title="显示或隐藏下方统计和图表">
+              <span className="text-[11px] text-[var(--text-muted)]">概览</span>
+              <MiniToggle
+                on={showOverview}
+                title={showOverview ? "隐藏概览" : "显示概览"}
+                onClick={() => setShowOverview((value) => !value)}
+              />
+            </div>
             <button
               onClick={syncEnabledFields}
               disabled={syncing}
@@ -366,7 +384,7 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
               {syncing ? "同步中" : "同步"}
             </button>
             <button
-              onClick={loadSkills}
+              onClick={() => loadSkills({ showLoading: true })}
               disabled={loading}
               className="grid h-7 w-7 place-items-center rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
               title="刷新"
@@ -388,18 +406,22 @@ export default function SkillsPanel({ onClose, workingDir }: SkillsPanelProps) {
           </div>
         )}
 
-        <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <StatCard label="技能总数" value={formatCount(stats.total)} sub={`${chartSkills.length} 个唯一名称`} />
-          <StatCard label="使用次数" value={formatCount(stats.totalUsage)} sub={`${stats.used} 个技能有记录`} />
-          <StatCard label="闲置技能" value={formatCount(stats.unused)} sub="可考虑先隐藏观察" />
-          <StatCard label="最近使用" value={stats.recent?.name ?? "-"} sub={formatDate(stats.recent?.last_used_at)} />
-        </div>
+        {showOverview && (
+          <>
+            <div className="mb-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+              <StatCard label="技能总数" value={formatCount(stats.total)} sub={`${chartSkills.length} 个唯一名称`} />
+              <StatCard label="使用次数" value={formatCount(stats.totalUsage)} sub={`${stats.used} 个技能有记录`} />
+              <StatCard label="闲置技能" value={formatCount(stats.unused)} sub="可考虑先隐藏观察" />
+              <StatCard label="最近使用" value={stats.recent?.name ?? "-"} sub={formatDate(stats.recent?.last_used_at)} />
+            </div>
 
-        <div className="mb-3 grid grid-cols-1 gap-3 2xl:grid-cols-[1.25fr_0.8fr_0.8fr]">
-          <UsageBars skills={chartSkills} />
-          <StateDonut enabled={stats.enabled} disabled={stats.disabled} />
-          <CategoryBars skills={chartSkills} />
-        </div>
+            <div className="mb-3 grid grid-cols-1 gap-3 2xl:grid-cols-[1.25fr_0.8fr_0.8fr]">
+              <UsageBars skills={chartSkills} />
+              <StateDonut enabled={stats.enabled} disabled={stats.disabled} />
+              <CategoryBars skills={chartSkills} />
+            </div>
+          </>
+        )}
 
         <div className="sticky top-0 z-20 mb-3 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-primary)]/88 p-3 backdrop-blur">
           <div className="flex flex-wrap items-center gap-2">

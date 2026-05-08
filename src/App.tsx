@@ -26,13 +26,35 @@ interface GitInfo {
 }
 
 type CodexTool = Extract<CliTool, "codex" | "codex_sub">;
+type BottomToolKey = "status" | "skills" | "actions" | "bugs" | "commits" | "files" | "launchpad" | "apiUse";
 
 const CODEX_PERMISSION_KEY = "coding-desktop-codex-permission-modes";
 const LEGACY_CODEX_PERMISSION_KEY = "claude-desktop-codex-permission-modes";
+const BOTTOM_TOOL_VISIBILITY_KEY = "coding-desktop-bottom-tool-visibility";
 const DEFAULT_CODEX_PERMISSION_MODES: Record<CodexTool, CodexPermissionMode> = {
   codex_sub: "full_access",
   codex: "full_access",
 };
+const DEFAULT_BOTTOM_TOOL_VISIBILITY: Record<BottomToolKey, boolean> = {
+  status: true,
+  skills: true,
+  actions: true,
+  bugs: true,
+  commits: true,
+  files: true,
+  launchpad: true,
+  apiUse: true,
+};
+const BOTTOM_TOOL_OPTIONS: { key: BottomToolKey; label: string; detail: string }[] = [
+  { key: "status", label: "Status", detail: "Version, updates, theme" },
+  { key: "skills", label: "Skills", detail: "Skills dashboard" },
+  { key: "actions", label: "Actions", detail: "Quick actions" },
+  { key: "bugs", label: "Bugs", detail: "Bug tracker" },
+  { key: "commits", label: "Commits", detail: "Commit history" },
+  { key: "files", label: "Files", detail: "File tree" },
+  { key: "launchpad", label: "Launchpad", detail: "Project launcher" },
+  { key: "apiUse", label: "API Use", detail: "Codex usage" },
+];
 
 const CODEX_PERMISSION_OPTIONS: { value: CodexPermissionMode; label: string }[] = [
   { value: "default", label: "默认权限" },
@@ -59,11 +81,42 @@ function loadCodexPermissionModes(): Record<CodexTool, CodexPermissionMode> {
   }
 }
 
+function loadBottomToolVisibility(): Record<BottomToolKey, boolean> {
+  try {
+    const raw = localStorage.getItem(BOTTOM_TOOL_VISIBILITY_KEY);
+    if (!raw) return DEFAULT_BOTTOM_TOOL_VISIBILITY;
+    const parsed = JSON.parse(raw) as Partial<Record<BottomToolKey, boolean>>;
+    return {
+      ...DEFAULT_BOTTOM_TOOL_VISIBILITY,
+      ...Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === "boolean"),
+      ),
+    } as Record<BottomToolKey, boolean>;
+  } catch {
+    return DEFAULT_BOTTOM_TOOL_VISIBILITY;
+  }
+}
+
 function normalizeCliTool(tool: string | null | undefined): CliTool {
   if (tool === "gemini" || tool === "codex" || tool === "codex_sub" || tool === "volc") {
     return tool;
   }
   return "claude";
+}
+
+function BottomToolSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      className={`relative h-4 w-7 shrink-0 rounded-full border transition-colors ${
+        on ? "border-[var(--accent-cyan)] bg-[var(--accent-cyan)]" : "border-[var(--border-color)] bg-[var(--bg-hover)]"
+      }`}
+    >
+      <span
+        className="absolute top-[2px] h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform"
+        style={{ transform: on ? "translateX(14px)" : "translateX(2px)" }}
+      />
+    </span>
+  );
 }
 
 function App() {
@@ -84,6 +137,8 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showLaunchpad, setShowLaunchpad] = useState(false);
   const [showCodexUsage, setShowCodexUsage] = useState(false);
+  const [showBottomToolSettings, setShowBottomToolSettings] = useState(false);
+  const [bottomToolVisibility, setBottomToolVisibility] = useState<Record<BottomToolKey, boolean>>(loadBottomToolVisibility);
   const [moreModePickerTabId, setMoreModePickerTabId] = useState<string | null>(null);
   const [codexPermissionModes, setCodexPermissionModes] = useState<Record<CodexTool, CodexPermissionMode>>(loadCodexPermissionModes);
   // Track tabs that have had terminal mode activated (for lazy mounting)
@@ -97,10 +152,37 @@ function App() {
   const activatedTabsRef = useRef<Set<string>>(new Set());
   // Track which tabs are in waiting state
   const waitingTabsRef = useRef<Set<string>>(new Set());
+  const bottomToolSettingsRef = useRef<HTMLDivElement>(null);
+  const bottomToolVisibilityRef = useRef(bottomToolVisibility);
+  bottomToolVisibilityRef.current = bottomToolVisibility;
 
   useEffect(() => {
     localStorage.setItem(CODEX_PERMISSION_KEY, JSON.stringify(codexPermissionModes));
   }, [codexPermissionModes]);
+
+  useEffect(() => {
+    localStorage.setItem(BOTTOM_TOOL_VISIBILITY_KEY, JSON.stringify(bottomToolVisibility));
+  }, [bottomToolVisibility]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!bottomToolSettingsRef.current?.contains(event.target as Node)) {
+        setShowBottomToolSettings(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    if (!bottomToolVisibility.skills) setShowSkills(false);
+    if (!bottomToolVisibility.actions) setShowQuickActions(false);
+    if (!bottomToolVisibility.bugs) setShowBugTracker(false);
+    if (!bottomToolVisibility.commits) setShowCommits(false);
+    if (!bottomToolVisibility.files) setShowFileTree(false);
+    if (!bottomToolVisibility.launchpad) setShowLaunchpad(false);
+    if (!bottomToolVisibility.apiUse) setShowCodexUsage(false);
+  }, [bottomToolVisibility]);
 
   // 分屏状态
   const [splitTabId, setSplitTabId] = useState<string | null>(null);
@@ -400,6 +482,7 @@ function App() {
   }, [workingDir]);
 
   const handleToggleLaunchpad = useCallback(() => {
+    if (!bottomToolVisibilityRef.current.launchpad) return;
     setShowLaunchpad((prev) => {
       const next = !prev;
       if (next) {
@@ -411,6 +494,7 @@ function App() {
   }, []);
 
   const handleToggleCodexUsage = useCallback(() => {
+    if (!bottomToolVisibilityRef.current.apiUse) return;
     setShowCodexUsage((prev) => {
       const next = !prev;
       if (next) {
@@ -422,6 +506,7 @@ function App() {
   }, []);
 
   const handleToggleSkills = useCallback(() => {
+    if (!bottomToolVisibilityRef.current.skills) return;
     setShowSkills((prev) => {
       const next = !prev;
       if (next) {
@@ -431,6 +516,26 @@ function App() {
       return next;
     });
   }, []);
+
+  const closeBottomToolPanel = useCallback((key: BottomToolKey) => {
+    if (key === "skills") setShowSkills(false);
+    if (key === "actions") setShowQuickActions(false);
+    if (key === "bugs") setShowBugTracker(false);
+    if (key === "commits") setShowCommits(false);
+    if (key === "files") setShowFileTree(false);
+    if (key === "launchpad") setShowLaunchpad(false);
+    if (key === "apiUse") setShowCodexUsage(false);
+  }, []);
+
+  const toggleBottomToolVisibility = useCallback((key: BottomToolKey) => {
+    let shouldClose = false;
+    setBottomToolVisibility((prev) => {
+      const nextVisible = !prev[key];
+      shouldClose = !nextVisible;
+      return { ...prev, [key]: nextVisible };
+    });
+    if (shouldClose) closeBottomToolPanel(key);
+  }, [closeBottomToolPanel]);
 
   const handleNewSession = useCallback(async () => {
     await handleNewTab();
@@ -496,19 +601,19 @@ function App() {
         }
         case "e": {
           e.preventDefault();
-          setShowFileTree((prev) => !prev);
+          if (bottomToolVisibilityRef.current.files) setShowFileTree((prev) => !prev);
           break;
         }
         case "A": {
           // Cmd+Shift+A 切换快捷按钮面板
           e.preventDefault();
-          setShowQuickActions((prev) => !prev);
+          if (bottomToolVisibilityRef.current.actions) setShowQuickActions((prev) => !prev);
           break;
         }
         case "B": {
           // Cmd+Shift+B 切换 Bug 看板
           e.preventDefault();
-          setShowBugTracker((prev) => !prev);
+          if (bottomToolVisibilityRef.current.bugs) setShowBugTracker((prev) => !prev);
           break;
         }
         case "1":
@@ -936,68 +1041,120 @@ function App() {
           </div>
         </div>
       </div>
-      <div className="flex">
-        <StatusBar />
-        <button
-          onClick={handleToggleSkills}
-          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showSkills ? "text-[var(--accent-purple)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-        >
-          Skills
-        </button>
-        <button
-          onClick={() => setShowQuickActions(!showQuickActions)}
-          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showQuickActions ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-          title="快捷操作 (⌘⇧A)"
-        >
-          Actions
-        </button>
-        <button
-          onClick={() => setShowBugTracker(!showBugTracker)}
-          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showBugTracker ? "text-[var(--accent-red)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-          title="Bug 看板"
-        >
-          Bugs
-        </button>
-        <button
-          onClick={() => setShowCommits(!showCommits)}
-          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showCommits ? "text-[var(--accent-blue)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-        >
-          Commits
-        </button>
-        <button
-          onClick={() => setShowFileTree(!showFileTree)}
-          className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showFileTree ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-        >
-          Files
-        </button>
-        <button
-          onClick={handleToggleLaunchpad}
-          className={`px-3 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showLaunchpad ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-          title="项目启动面板"
-        >
-          Launchpad
-        </button>
-        <button
-          onClick={handleToggleCodexUsage}
-          className={`px-3 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
-            showCodexUsage ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-          }`}
-          title="Codex API 用量"
-        >
-          API Use
-        </button>
+      <div className="relative flex">
+        {bottomToolVisibility.status ? (
+          <StatusBar />
+        ) : (
+          <div className="flex-1 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)]" />
+        )}
+        {bottomToolVisibility.skills && (
+          <button
+            onClick={handleToggleSkills}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showSkills ? "text-[var(--accent-purple)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            Skills
+          </button>
+        )}
+        {bottomToolVisibility.actions && (
+          <button
+            onClick={() => setShowQuickActions(!showQuickActions)}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showQuickActions ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="快捷操作 (⌘⇧A)"
+          >
+            Actions
+          </button>
+        )}
+        {bottomToolVisibility.bugs && (
+          <button
+            onClick={() => setShowBugTracker(!showBugTracker)}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showBugTracker ? "text-[var(--accent-red)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="Bug 看板"
+          >
+            Bugs
+          </button>
+        )}
+        {bottomToolVisibility.commits && (
+          <button
+            onClick={() => setShowCommits(!showCommits)}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showCommits ? "text-[var(--accent-blue)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            Commits
+          </button>
+        )}
+        {bottomToolVisibility.files && (
+          <button
+            onClick={() => setShowFileTree(!showFileTree)}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showFileTree ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            Files
+          </button>
+        )}
+        {bottomToolVisibility.launchpad && (
+          <button
+            onClick={handleToggleLaunchpad}
+            className={`px-3 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showLaunchpad ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="项目启动面板"
+          >
+            Launchpad
+          </button>
+        )}
+        {bottomToolVisibility.apiUse && (
+          <button
+            onClick={handleToggleCodexUsage}
+            className={`px-3 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showCodexUsage ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="Codex API 用量"
+          >
+            API Use
+          </button>
+        )}
+        <div ref={bottomToolSettingsRef} className="relative">
+          <button
+            onClick={() => setShowBottomToolSettings((prev) => !prev)}
+            className={`px-2.5 py-0.5 text-[10px] border-t border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] cursor-pointer transition-colors duration-150 ${
+              showBottomToolSettings ? "text-[var(--accent-cyan)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+            title="Bottom toolbar settings"
+          >
+            Settings
+          </button>
+          {showBottomToolSettings && (
+            <div className="absolute bottom-full right-1 z-50 mb-2 w-64 overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] shadow-2xl shadow-[var(--shadow-color)]">
+              <div className="border-b border-[var(--border-subtle)] px-3 py-2">
+                <div className="text-xs font-medium text-[var(--text-primary)]">Bottom Tools</div>
+                <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">Hide or show footer shortcuts</div>
+              </div>
+              <div className="max-h-72 overflow-y-auto p-1.5">
+                {BOTTOM_TOOL_OPTIONS.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => toggleBottomToolVisibility(item.key)}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--bg-hover)]"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs text-[var(--text-primary)]">{item.label}</span>
+                      <span className="block truncate text-[10px] text-[var(--text-muted)]">{item.detail}</span>
+                    </span>
+                    <BottomToolSwitch on={bottomToolVisibility[item.key]} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tab close confirmation modal */}

@@ -11,8 +11,8 @@ type SystemProxyConfig = {
   source: string;
 };
 
-const APP_VERSION = "0.9.25";
-const UPDATE_CHECK_TIMEOUT = 15000;
+const APP_VERSION = "0.9.26";
+const UPDATE_CHECK_TIMEOUT = 45000;
 const UPDATE_DOWNLOAD_TIMEOUT = 10 * 60 * 1000;
 
 export default function StatusBar() {
@@ -56,6 +56,10 @@ export default function StatusBar() {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  const getErrorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  const formatCheckFailure = (label: string, e: unknown) => `${label}: ${getErrorMessage(e)}`;
+
   const checkWithOptions = async (options: CheckOptions, network: UpdateNetwork) => {
     const update = await check(options);
     if (!checkCancelledRef.current) {
@@ -94,7 +98,14 @@ export default function StatusBar() {
           );
         } catch (proxyError) {
           console.warn("System proxy update check failed, falling back to updater defaults:", proxyError);
-          update = await checkWithOptions({ timeout: UPDATE_CHECK_TIMEOUT }, "default");
+          try {
+            update = await checkWithOptions({ timeout: UPDATE_CHECK_TIMEOUT }, "default");
+          } catch (defaultError) {
+            throw new Error([
+              formatCheckFailure(`系统代理失败（${systemProxy.source} ${systemProxy.url}）`, proxyError),
+              formatCheckFailure("直连失败", defaultError),
+            ].join("；"));
+          }
         }
       } else {
         update = await checkWithOptions({ timeout: UPDATE_CHECK_TIMEOUT }, "default");
@@ -111,7 +122,7 @@ export default function StatusBar() {
       }
     } catch (e: unknown) {
       if (checkCancelledRef.current) return;
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = getErrorMessage(e);
       console.error("Update check error:", msg);
       setUpdateStatus("error");
       setErrorMsg(msg);
@@ -145,12 +156,12 @@ export default function StatusBar() {
       }, { timeout: UPDATE_DOWNLOAD_TIMEOUT });
       setUpdateStatus("done");
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = getErrorMessage(e);
       setUpdateStatus("error");
-      setErrorMsg(msg);
+      setErrorMsg(`下载失败（${updateNetwork === "system-proxy" ? "系统代理链路" : "默认链路"}）: ${msg}`);
       setTimeout(() => setUpdateStatus("idle"), 5000);
     }
-  }, []);
+  }, [updateNetwork]);
 
   const handleRelaunch = useCallback(async () => {
     await relaunch();
